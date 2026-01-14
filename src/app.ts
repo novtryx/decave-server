@@ -9,7 +9,28 @@ const app: Application = express();
 
 // Middleware
 app.use(helmet());
-app.use(cors());
+const allowedOrigins = process.env.ALLOWED_ORIGINS?.split(",") || [];
+
+const corsOptions: cors.CorsOptions = {
+  origin: (origin, callback) => {
+    // Allow requests with no origin (Postman, mobile apps, server-to-server)
+    if (!origin) return callback(null, true);
+
+    if (allowedOrigins.includes(origin)) {
+      return callback(null, true);
+    }
+
+    return callback(
+      new Error(`CORS blocked: ${origin} is not allowed`),
+      false
+    );
+  },
+  credentials: true,
+  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization"],
+};
+
+app.use(cors(corsOptions));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
