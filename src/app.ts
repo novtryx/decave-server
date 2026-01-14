@@ -3,6 +3,7 @@ import cors from 'cors';
 import helmet from 'helmet';
 import adminRoute from './routes/admin.route';
 import { authRateLimiter } from './middleware/rateLimit.middleware';
+import { ensureDbConnection } from './middleware/dbConnection.middleware';
 
 
 const app: Application = express();
@@ -36,6 +37,8 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
 // Routes placeholder (will add limiter later)
+app.use("/api", ensureDbConnection);
+
 app.use('/api/auth', authRateLimiter, adminRoute);
 
 // Health check
