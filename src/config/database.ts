@@ -11,7 +11,7 @@ export const connectDB = async (): Promise<void> => {
   try {
     await mongoose.connect(mongoUri, {
       autoIndex: true,                   // builds indexes
-      serverSelectionTimeoutMS: 10000,   // 10 seconds
+      serverSelectionTimeoutMS: 20000,   // 10 seconds
     });
 
     console.log('✅ MongoDB connected');
