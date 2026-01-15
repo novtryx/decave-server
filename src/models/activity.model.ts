@@ -20,6 +20,7 @@ const ActivitySchema = new Schema<IActivity>(
           "event_created",
           "event_updated",
           "event_deleted",
+          "event_published",
           "ticket_purchased",
           "ticket_cancelled",
           "partner_added",

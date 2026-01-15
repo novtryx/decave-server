@@ -98,7 +98,7 @@ export class AdminService {
       };
 
       return jwt.sign(payload, JWT_SECRET, {
-        expiresIn: 900,
+        expiresIn: 604800,
       });
     } catch (error: any) {
       throw new Error(`Error generating token: ${error.message}`);

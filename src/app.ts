@@ -4,6 +4,10 @@ import helmet from 'helmet';
 import adminRoute from './routes/admin.route';
 import { authRateLimiter } from './middleware/rateLimit.middleware';
 import { ensureDbConnection } from './middleware/dbConnection.middleware';
+import uploadRoutes from "./routes/upload.route";
+import eventRoutes from "./routes/event.route";
+import partnerRoutes from "./routes/partner.route"
+
 
 
 const app: Application = express();
@@ -40,10 +44,16 @@ app.use(express.urlencoded({ extended: true }));
 app.use("/api", ensureDbConnection);
 
 app.use('/api/auth', authRateLimiter, adminRoute);
+app.use("/api/upload", uploadRoutes);
+app.use("/api/events", eventRoutes);
+app.use("/api/partners", partnerRoutes);
 
+
+
+ 
 // Health check
 app.get('/api/health', (req: Request, res: Response) => {
   res.json({ status: 'healthy' });
 });
-
+ 
 export default app;
