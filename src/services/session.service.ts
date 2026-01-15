@@ -1,8 +1,8 @@
-import {UAParser} from "ua-parser-js";
+import { UAParser } from "ua-parser-js";
 import geoip from "geoip-lite";
 import { Request } from "express";
 import { SessionData } from "../types/service.type";
-import { redisClient } from './../config/redis';
+import { getRedisClient } from './../config/redis';
 
 
 
@@ -11,11 +11,13 @@ export class SessionService {
   private USER_SESSIONS_PREFIX = "user_sessions:";
   private SESSION_EXPIRY = 7 * 24 * 60 * 60; // 7 days in seconds
 
-    private async ensureRedisConnection(): Promise<void> {
+  private async ensureRedisConnection(): Promise<void> {
+    const redisClient = await getRedisClient(); // Get client on demand
+
     if (!redisClient) {
       throw new Error("Redis client is not initialized");
     }
-    
+
     // Check if client is ready
     if (!redisClient.isOpen) {
       await redisClient.connect();
@@ -37,7 +39,7 @@ export class SessionService {
   private getLocationFromIP(ip: string) {
     // Remove IPv6 prefix if present
     const cleanIP = ip.replace(/^::ffff:/, "");
-    
+
     const geo = geoip.lookup(cleanIP);
 
     if (geo) {
@@ -82,7 +84,8 @@ export class SessionService {
     req: Request
   ): Promise<SessionData> {
     try {
-      await this.ensureRedisConnection();
+      const redisClient = await getRedisClient(); // Get client on demand
+
 
 
       const userAgent = req.headers["user-agent"] || "Unknown";
@@ -131,7 +134,8 @@ export class SessionService {
   // Get all user sessions
   async getUserSessions(userId: string, currentToken?: string): Promise<SessionData[]> {
     try {
-            await this.ensureRedisConnection();
+      const redisClient = await getRedisClient(); // Get client on demand
+
 
       const sessionKeys = await redisClient.sMembers(
         `${this.USER_SESSIONS_PREFIX}${userId}`
@@ -143,10 +147,10 @@ export class SessionService {
         const sessionData = await redisClient.get(sessionKey);
         if (sessionData) {
           const session: SessionData = JSON.parse(sessionData);
-          
+
           // Mark current session
           session.isCurrent = currentToken ? session.token === currentToken : false;
-          
+
           sessions.push(session);
         } else {
           // Remove expired session from set
@@ -170,7 +174,8 @@ export class SessionService {
   // Update session last active time
   async updateSessionActivity(userId: string, token: string): Promise<void> {
     try {
-            await this.ensureRedisConnection();
+      const redisClient = await getRedisClient(); // Get client on demand
+
 
       const sessionKeys = await redisClient.sMembers(
         `${this.USER_SESSIONS_PREFIX}${userId}`
@@ -180,10 +185,10 @@ export class SessionService {
         const sessionData = await redisClient.get(sessionKey);
         if (sessionData) {
           const session: SessionData = JSON.parse(sessionData);
-          
+
           if (session.token === token) {
             session.lastActive = new Date().toISOString();
-            
+
             await redisClient.setEx(
               sessionKey,
               this.SESSION_EXPIRY,
@@ -201,7 +206,8 @@ export class SessionService {
   // Revoke specific session
   async revokeSession(userId: string, token: string): Promise<boolean> {
     try {
-            await this.ensureRedisConnection();
+      const redisClient = await getRedisClient(); // Get client on demand
+
 
       const sessionKeys = await redisClient.sMembers(
         `${this.USER_SESSIONS_PREFIX}${userId}`
@@ -211,7 +217,7 @@ export class SessionService {
         const sessionData = await redisClient.get(sessionKey);
         if (sessionData) {
           const session: SessionData = JSON.parse(sessionData);
-          
+
           if (session.token === token) {
             await redisClient.del(sessionKey);
             await redisClient.sRem(
@@ -232,7 +238,8 @@ export class SessionService {
   // Revoke all sessions except current
   async revokeAllOtherSessions(userId: string, currentToken: string): Promise<number> {
     try {
-            await this.ensureRedisConnection();
+      const redisClient = await getRedisClient(); // Get client on demand
+
 
       const sessionKeys = await redisClient.sMembers(
         `${this.USER_SESSIONS_PREFIX}${userId}`
@@ -244,7 +251,7 @@ export class SessionService {
         const sessionData = await redisClient.get(sessionKey);
         if (sessionData) {
           const session: SessionData = JSON.parse(sessionData);
-          
+
           if (session.token !== currentToken) {
             await redisClient.del(sessionKey);
             await redisClient.sRem(
@@ -265,7 +272,7 @@ export class SessionService {
   // Revoke all user sessions
   async revokeAllSessions(userId: string): Promise<number> {
     try {
-            await this.ensureRedisConnection();
+      const redisClient = await getRedisClient(); // Get client on demand
 
       const sessionKeys = await redisClient.sMembers(
         `${this.USER_SESSIONS_PREFIX}${userId}`
@@ -286,7 +293,7 @@ export class SessionService {
   // Check if session exists
   async sessionExists(userId: string, token: string): Promise<boolean> {
     try {
-            await this.ensureRedisConnection();
+      const redisClient = await getRedisClient(); // Get client on demand
 
       const sessionKeys = await redisClient.sMembers(
         `${this.USER_SESSIONS_PREFIX}${userId}`
@@ -311,7 +318,8 @@ export class SessionService {
   // Get active sessions count
   async getActiveSessionsCount(userId: string): Promise<number> {
     try {
-            await this.ensureRedisConnection();
+      const redisClient = await getRedisClient(); // Get client on demand
+
 
       const sessionKeys = await redisClient.sMembers(
         `${this.USER_SESSIONS_PREFIX}${userId}`
