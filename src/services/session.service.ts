@@ -11,6 +11,16 @@ export class SessionService {
   private USER_SESSIONS_PREFIX = "user_sessions:";
   private SESSION_EXPIRY = 7 * 24 * 60 * 60; // 7 days in seconds
 
+    private async ensureRedisConnection(): Promise<void> {
+    if (!redisClient) {
+      throw new Error("Redis client is not initialized");
+    }
+    
+    // Check if client is ready
+    if (!redisClient.isOpen) {
+      await redisClient.connect();
+    }
+  }
   // Extract device info from User-Agent
   private getDeviceInfo(userAgent: string) {
     const parser = new UAParser(userAgent);
@@ -72,6 +82,9 @@ export class SessionService {
     req: Request
   ): Promise<SessionData> {
     try {
+      await this.ensureRedisConnection();
+
+
       const userAgent = req.headers["user-agent"] || "Unknown";
       const ipAddress = this.getClientIP(req);
       const deviceInfo = this.getDeviceInfo(userAgent);
@@ -118,6 +131,8 @@ export class SessionService {
   // Get all user sessions
   async getUserSessions(userId: string, currentToken?: string): Promise<SessionData[]> {
     try {
+            await this.ensureRedisConnection();
+
       const sessionKeys = await redisClient.sMembers(
         `${this.USER_SESSIONS_PREFIX}${userId}`
       );
@@ -155,6 +170,8 @@ export class SessionService {
   // Update session last active time
   async updateSessionActivity(userId: string, token: string): Promise<void> {
     try {
+            await this.ensureRedisConnection();
+
       const sessionKeys = await redisClient.sMembers(
         `${this.USER_SESSIONS_PREFIX}${userId}`
       );
@@ -184,6 +201,8 @@ export class SessionService {
   // Revoke specific session
   async revokeSession(userId: string, token: string): Promise<boolean> {
     try {
+            await this.ensureRedisConnection();
+
       const sessionKeys = await redisClient.sMembers(
         `${this.USER_SESSIONS_PREFIX}${userId}`
       );
@@ -213,6 +232,8 @@ export class SessionService {
   // Revoke all sessions except current
   async revokeAllOtherSessions(userId: string, currentToken: string): Promise<number> {
     try {
+            await this.ensureRedisConnection();
+
       const sessionKeys = await redisClient.sMembers(
         `${this.USER_SESSIONS_PREFIX}${userId}`
       );
@@ -244,6 +265,8 @@ export class SessionService {
   // Revoke all user sessions
   async revokeAllSessions(userId: string): Promise<number> {
     try {
+            await this.ensureRedisConnection();
+
       const sessionKeys = await redisClient.sMembers(
         `${this.USER_SESSIONS_PREFIX}${userId}`
       );
@@ -263,6 +286,8 @@ export class SessionService {
   // Check if session exists
   async sessionExists(userId: string, token: string): Promise<boolean> {
     try {
+            await this.ensureRedisConnection();
+
       const sessionKeys = await redisClient.sMembers(
         `${this.USER_SESSIONS_PREFIX}${userId}`
       );
@@ -286,6 +311,8 @@ export class SessionService {
   // Get active sessions count
   async getActiveSessionsCount(userId: string): Promise<number> {
     try {
+            await this.ensureRedisConnection();
+
       const sessionKeys = await redisClient.sMembers(
         `${this.USER_SESSIONS_PREFIX}${userId}`
       );
