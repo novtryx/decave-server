@@ -11,7 +11,7 @@ export const createEvent = async (req: AuthRequest, res: Response): Promise<void
 
     // Handle event banner upload if file is provided
     if (req.file) {
-      const result = await uploadService.uploadImage(req.file.path, "decave/events/banners");
+      const result = await uploadService.uploadImage(req.file.buffer, "decave/events/banners");
       eventData.eventDetails.eventBanner = result.secure_url;
     }
 

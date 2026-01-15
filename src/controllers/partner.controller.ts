@@ -9,7 +9,7 @@ export const createPartner = async (req: Request, res: Response): Promise<void> 
 
     // Handle brand logo upload if file is provided
     if (req.file) {
-      const result = await uploadService.uploadImage(req.file.path, "decave/partners/logos");
+      const result = await uploadService.uploadImage(req.file.buffer, "decave/partners/logos");
       partnerData.brandLogo = result.secure_url;
     }
 
@@ -92,7 +92,7 @@ export const updatePartner = async (req: Request, res: Response): Promise<void> 
 
     // Handle brand logo upload if file is provided
     if (req.file) {
-      const result = await uploadService.uploadImage(req.file.path, "decave/partners/logos");
+      const result = await uploadService.uploadImage(req.file.buffer, "decave/partners/logos");
       updateData.brandLogo = result.secure_url;
 
       // Delete old logo if exists

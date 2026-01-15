@@ -1,23 +1,8 @@
 import multer from "multer";
 import path from "path";
-import fs from "fs";
 
-// Create uploads directory if it doesn't exist
-const uploadDir = "uploads";
-if (!fs.existsSync(uploadDir)) {
-  fs.mkdirSync(uploadDir, { recursive: true });
-}
-
-// Configure storage
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    cb(null, uploadDir);
-  },
-  filename: (req, file, cb) => {
-    const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9);
-    cb(null, file.fieldname + "-" + uniqueSuffix + path.extname(file.originalname));
-  },
-});
+// Use memory storage instead of disk
+const storage = multer.memoryStorage();
 
 // File filter for images
 const imageFilter = (req: any, file: Express.Multer.File, cb: multer.FileFilterCallback) => {
@@ -90,7 +75,7 @@ export const uploadMedia = multer({
 export const uploadSingleImage = uploadImage.single("image");
 
 // Multiple images upload
-export const uploadMultipleImages = uploadImage.array("images", 10); // Max 10 images
+export const uploadMultipleImages = uploadImage.array("images", 10);
 
 // Single video upload
 export const uploadSingleVideo = uploadVideo.single("video");

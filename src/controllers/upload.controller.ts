@@ -13,7 +13,7 @@ export const uploadSingleImage = async (req: AuthRequest, res: Response): Promis
       return;
     }
 
-    const result = await uploadService.uploadImage(req.file.path);
+    const result = await uploadService.uploadImage(req.file.buffer);
 
     res.status(200).json({
       success: true,
@@ -45,7 +45,7 @@ export const uploadMultipleImages = async (req: AuthRequest, res: Response): Pro
       return;
     }
 
-    const filePaths = req.files.map((file) => file.path);
+    const filePaths = req.files.map((file) => file.buffer);
     const results = await uploadService.uploadMultipleImages(filePaths);
 
     const uploadedImages = results.map((result) => ({
@@ -80,7 +80,7 @@ export const uploadSingleVideo = async (req: AuthRequest, res: Response): Promis
       return;
     }
 
-    const result = await uploadService.uploadVideo(req.file.path);
+    const result = await uploadService.uploadVideo(req.file.buffer);
 
     res.status(200).json({
       success: true,
