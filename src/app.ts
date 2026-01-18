@@ -7,7 +7,8 @@ import { ensureDbConnection } from './middleware/dbConnection.middleware';
 import uploadRoutes from "./routes/upload.route";
 import eventRoutes from "./routes/event.route";
 import partnerRoutes from "./routes/partner.route"
-
+import paymentRoutes from "./routes/payment.route"
+import transactionRoute from "./routes/transaction.route"
 
 
 const app: Application = express();
@@ -47,6 +48,8 @@ app.use('/api/auth', authRateLimiter, adminRoute);
 app.use("/api/upload", uploadRoutes);
 app.use("/api/events", eventRoutes);
 app.use("/api/partners", partnerRoutes);
+app.use("/api/payment", paymentRoutes);
+app.use("/api/transaction", transactionRoute);
 
 
 

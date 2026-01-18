@@ -68,7 +68,9 @@ export interface IEvent extends Document {
         currency: string;
         initialQuantity:number;
         availableQuantity: number;
-        benefits:string[]
+        benefits:string[];
+        _id:mongoose.Types.ObjectId
+
   }[];
 
   //stage 4
@@ -128,4 +130,25 @@ export interface ITransaction extends Document {
     buyer:{
         
     }
+}
+
+export interface IBuyer extends Document {
+  fullName: string;
+  email: string;
+  phoneNumber: string;
+  ticketId: string;
+  checkedIn: boolean;
+  qrCode: string;
+}
+
+export interface ITransactionHistory extends Document{
+  txnId: string;
+  paystackId:string;
+  event: mongoose.Types.ObjectId;
+  ticket: mongoose.Types.ObjectId;
+  buyers: IBuyer[];
+  
+  status: "pending"| "failed"| "completed";
+   createdAt?: Date;
+  updatedAt?: Date;
 }
