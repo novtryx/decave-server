@@ -10,7 +10,7 @@ export const getAllTransactionHistory = async (req:Request, res:Response) => {
 
         res.status(200).json({
             message: "transactions fetched successfully",
-            sucess: true,
+            success: true,
             data: history.history,
             pagination: history.pagination
         })
