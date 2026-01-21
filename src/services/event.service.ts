@@ -35,6 +35,14 @@ export class EventService {
     }
   }
 
+  async getEventByName(eventTitle: string): Promise<IEvent | null> {
+    try {
+      await this.ensureConnection();
+      return await eventModel.findOne({ "eventDetails.eventTitle": eventTitle });
+    } catch (error: any) {
+      throw new Error(`Error fetching event: ${error.message}`);
+    }
+  }
   // Get all events with pagination
   async getAllEvents(page: number = 1, limit: number = 10, filters?: any) {
     try {

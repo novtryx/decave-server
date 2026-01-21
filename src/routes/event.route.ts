@@ -13,6 +13,7 @@ import {
   getUpcomingEvents,
   getPastEvents,
   getEventStats,
+  getEventByTitle,
 } from "../controllers/event.controller";
 import {
   validateCreateEvent,
@@ -41,6 +42,7 @@ router.post(
 );
 
 router.get("/", getAllEvents);
+router.get("/eventTitle/:eventTitle", getEventByTitle);
 
 router.put(
   "/:id",

@@ -57,6 +57,32 @@ export const getEventById = async (req: AuthRequest, res: Response): Promise<voi
   }
 };
 
+export const getEventByTitle = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { eventTitle } = req.params;
+
+    const event = await eventService.getEventByName(eventTitle as string);
+
+    if (!event) {
+      res.status(404).json({
+        success: false,
+        message: "Event not found",
+      });
+      return;
+    }
+
+    res.status(200).json({
+      success: true,
+      data: event,
+    });
+  } catch (error: any) {
+    res.status(500).json({
+      success: false,
+      message: error.message,
+    });
+  }
+};
+
 // Get all events
 export const getAllEvents = async (req: Request, res: Response): Promise<void> => {
   try {
