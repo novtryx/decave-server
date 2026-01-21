@@ -59,7 +59,7 @@ export const purchaseTicket = async (req: Request, res: Response) => {
       for (let i = 0; i < qty; i++) {
         const buyerTicketId = generateBuyerTicketId(event.eventDetails.eventTitle);
         // const qrPayload = `EVENT:${event.eventDetails.eventTitle}|TXN:${txnId}|TICKET:${buyerTicketId}`;
-        const qrPayload =`https://decave-demo.vercel.app/ticket?txnId=${txnId}&ticketId=${buyerTicketId}`
+        const qrPayload =`http://localhost:3000/ticket?txnId=${txnId}&ticketId=${buyerTicketId}`
         const qrCode = await QRCode.toDataURL(qrPayload);
 
 
@@ -93,7 +93,7 @@ export const purchaseTicket = async (req: Request, res: Response) => {
         txnId,
         transactionId: transaction._id
       },
-      callback_url: "http://localhost:3000/payment-success"
+      callback_url: "http://localhost:3000/checkout/success"
     });
 
     res.status(200).json({
