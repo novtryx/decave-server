@@ -90,22 +90,27 @@ export class EventService {
     try {
       await this.ensureConnection();
 
-      // Find the document first
-      const event = await eventModel.findById(id);
+      // Flatten nested objects to dot notation
+      const flattenedUpdate: any = {};
       
-      if (!event) {
-        return null;
-      }
-
-      // Update fields
       Object.keys(updateData).forEach(key => {
-        (event as any)[key] = (updateData as any)[key];
+        if (key === 'aboutEvent' && updateData.aboutEvent) {
+          // Handle aboutEvent specifically with dot notation
+          flattenedUpdate['aboutEvent.heading'] = updateData.aboutEvent.heading;
+          flattenedUpdate['aboutEvent.description'] = updateData.aboutEvent.description;
+          flattenedUpdate['aboutEvent.content'] = updateData.aboutEvent.content;
+        } else {
+          flattenedUpdate[key] = (updateData as any)[key];
+        }
       });
 
-      // Save with validation
-      await event.save();
+      const updatedEvent = await eventModel.findByIdAndUpdate(
+        id,
+        { $set: flattenedUpdate },
+        { new: true, runValidators: true }
+      );
 
-      return event;
+      return updatedEvent;
     } catch (error: any) {
       throw new Error(`Error updating event: ${error.message}`);
     }
