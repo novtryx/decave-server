@@ -90,18 +90,26 @@ export class EventService {
     try {
       await this.ensureConnection();
 
-      const updatedEvent = await eventModel.findByIdAndUpdate(
-        id,
-        { $set: updateData },
-        { new: true, runValidators: true }
-      );
+      // Find the document first
+      const event = await eventModel.findById(id);
+      
+      if (!event) {
+        return null;
+      }
 
-      return updatedEvent;
+      // Update fields
+      Object.keys(updateData).forEach(key => {
+        (event as any)[key] = (updateData as any)[key];
+      });
+
+      // Save with validation
+      await event.save();
+
+      return event;
     } catch (error: any) {
       throw new Error(`Error updating event: ${error.message}`);
     }
   }
-
   // Update specific stage
   async updateEventStage(
     id: string,
