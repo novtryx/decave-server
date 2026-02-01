@@ -147,7 +147,6 @@ export interface ITransactionHistory extends Document{
   event: mongoose.Types.ObjectId;
   ticket: mongoose.Types.ObjectId;
   buyers: IBuyer[];
-  
   status: "pending"| "failed"| "completed";
    createdAt?: Date;
   updatedAt?: Date;

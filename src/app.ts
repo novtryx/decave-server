@@ -9,6 +9,9 @@ import eventRoutes from "./routes/event.route";
 import partnerRoutes from "./routes/partner.route"
 import paymentRoutes from "./routes/payment.route"
 import transactionRoute from "./routes/transaction.route"
+import dashboardRoute from "./routes/dashboard.route"
+import analyticsRoute from "./routes/analytics.route"
+
 
 
 const app: Application = express();
@@ -50,6 +53,9 @@ app.use("/api/events", eventRoutes);
 app.use("/api/partners", partnerRoutes);
 app.use("/api/payment", paymentRoutes);
 app.use("/api/transaction", transactionRoute);
+app.use("/api/dashboard", dashboardRoute);
+app.use("/api/analytics", analyticsRoute);
+
 
 
 

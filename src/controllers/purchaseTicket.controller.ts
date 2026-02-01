@@ -98,7 +98,8 @@ export const purchaseTicket = async (req: Request, res: Response) => {
 
     res.status(200).json({
       authorization_url: response.data.data.authorization_url,
-      txnId
+      txnId,
+      transaction
     });
 
   } catch (err) {

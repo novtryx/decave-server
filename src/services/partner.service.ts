@@ -31,48 +31,150 @@ export class PartnerService {
   }
 
   // Get all partners with pagination
-  async getAllPartners(page: number = 1, limit: number = 10, filters?: any) {
-    try {
-      await this.ensureConnection();
-      const skip = (page - 1) * limit;
+  async getAllPartners(
+  page: number = 1,
+  limit: number = 10,
+  filters?: any
+) {
+  try {
+    await this.ensureConnection();
 
-      const query: any = {};
+    const skip = (page - 1) * limit;
+    const now = new Date();
 
-      // Apply filters
-      if (filters?.sponsorshipTier) {
-        query.sponsorshipTier = filters.sponsorshipTier.toLowerCase();
+    const matchStage: any = {};
+
+    // 🔹 Filters
+    if (filters?.sponsorshipTier) {
+      matchStage.sponsorshipTier = filters.sponsorshipTier.toLowerCase();
+    }
+
+    if (filters?.isActive !== undefined) {
+      if (filters.isActive) {
+        matchStage.partnershipStartDate = { $lte: now };
+        matchStage.partnershipEndDate = { $gte: now };
       }
-      if (filters?.isActive !== undefined) {
-        const now = new Date();
-        if (filters.isActive) {
-          query.partnershipStartDate = { $lte: now };
-          query.partnershipEndDate = { $gte: now };
+    }
+
+    const [result] = await partnerModel.aggregate([
+      { $match: matchStage },
+
+      {
+        $facet: {
+          // ================= PARTNERS LIST =================
+          partners: [
+            { $sort: { createdAt: -1 } },
+            { $skip: skip },
+            { $limit: limit },
+
+            {
+              $lookup: {
+                from: "events",
+                localField: "associatedEvents",
+                foreignField: "_id",
+                as: "associatedEvents"
+              }
+            }
+          ],
+
+          // ================= TOTAL COUNTS =================
+          totals: [
+            {
+              $group: {
+                _id: null,
+
+                totalPartners: { $sum: 1 },
+
+                totalActive: {
+                  $sum: {
+                    $cond: [
+                      {
+                        $and: [
+                          { $lte: ["$partnershipStartDate", now] },
+                          { $gte: ["$partnershipEndDate", now] }
+                        ]
+                      },
+                      1,
+                      0
+                    ]
+                  }
+                },
+
+                totalPlatinumPartners: {
+                  $sum: {
+                    $cond: [
+                      { $eq: ["$sponsorshipTier", "platinum"] },
+                      1,
+                      0
+                    ]
+                  }
+                },
+
+                allEvents: {
+                  $addToSet: "$associatedEvents"
+                }
+              }
+            },
+
+            // flatten event arrays
+            { $unwind: { path: "$allEvents", preserveNullAndEmptyArrays: true } },
+            { $unwind: { path: "$allEvents", preserveNullAndEmptyArrays: true } },
+
+            {
+              $group: {
+                _id: null,
+                totalPartners: { $first: "$totalPartners" },
+                totalActive: { $first: "$totalActive" },
+                totalPlatinumPartners: { $first: "$totalPlatinumPartners" },
+                totalUniqueEvents: { $addToSet: "$allEvents" }
+              }
+            },
+
+            {
+              $project: {
+                _id: 0,
+                totalPartners: 1,
+                totalActive: 1,
+                totalPlatinumPartners: 1,
+                totalUniqueEvents: {
+                  $size: {
+                    $filter: {
+                      input: "$totalUniqueEvents",
+                      as: "e",
+                      cond: { $ne: ["$$e", null] }
+                    }
+                  }
+                }
+              }
+            }
+          ]
         }
       }
+    ]);
 
-      const partners = await partnerModel.find(query)
-        .populate("associatedEvents")
-        .sort({ createdAt: -1 })
-        .skip(skip)
-        .limit(limit);
+    const totals = result.totals[0] || {
+      totalPartners: 0,
+      totalActive: 0,
+      totalPlatinumPartners: 0,
+      totalUniqueEvents: 0
+    };
 
-      const total = await partnerModel.countDocuments(query);
-
-      return {
-        partners,
-        pagination: {
-          total,
-          page,
-          limit,
-          pages: Math.ceil(total / limit),
-          hasNext: page * limit < total,
-          hasPrev: page > 1,
-        },
-      };
-    } catch (error: any) {
-      throw new Error(`Error fetching partners: ${error.message}`);
-    }
+    return {
+      totals,
+      partners: result.partners,
+      pagination: {
+        total: totals.totalPartners,
+        page,
+        limit,
+        pages: Math.ceil(totals.totalPartners / limit),
+        hasNext: page * limit < totals.totalPartners,
+        hasPrev: page > 1
+      }
+    };
+  } catch (error: any) {
+    throw new Error(`Error fetching partners: ${error.message}`);
   }
+}
 
   // Update partner
   async updatePartner(id: string, updateData: Partial<IPartner>): Promise<IPartner | null> {

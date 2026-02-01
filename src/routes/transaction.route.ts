@@ -4,8 +4,8 @@ import { getAllTransactionHistory } from '../controllers/transactionHistory';
 import { authenticate } from '../middleware/auth.middleware';
 const router = express.Router()
 
-router.get("/", authenticate, getAllTransactionHistory)
+router.get("/", getAllTransactionHistory)
+ 
 
 
-
-export default router;
+export default router; 

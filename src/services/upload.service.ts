@@ -82,7 +82,7 @@ export class UploadService {
     try {
       const uploadPromises = fileBuffers.map((buffer) =>
         this.uploadImage(buffer, folder)
-      );
+      );  
       return await Promise.all(uploadPromises);
     } catch (error: any) {
       throw new Error(`Multiple image upload failed: ${error.message}`);

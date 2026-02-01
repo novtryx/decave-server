@@ -75,6 +75,7 @@ export const getAllPartners = async (req: Request, res: Response): Promise<void>
       success: true,
       data: result.partners,
       pagination: result.pagination,
+      stats: result.totals
     });
   } catch (error: any) {
     res.status(500).json({
