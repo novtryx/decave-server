@@ -11,6 +11,12 @@ const generateBuyerTicketId = (ticketName: string) => {
   return `${prefix}-${random}`;
 };
 
+const calculatePaystackCharge = (amount: number) => {
+  const percentage = 0.015 * amount;
+  const charge = percentage + 100;
+  return Math.min(charge, 2000);
+};
+
 export const purchaseTicket = async (req: Request, res: Response) => {
   try {
     const { eventId, ticketId, buyers, amount } = req.body;
@@ -84,10 +90,13 @@ export const purchaseTicket = async (req: Request, res: Response) => {
       paystackId: "INIT"
     });
 
+    const paystackFee = calculatePaystackCharge(amount);
+    const totalCharge = amount + paystackFee;
+
     // 7️⃣ Init Paystack
     const response = await paystack.post("/transaction/initialize", {
       email: buyers[0].email,
-      amount: amount * 100,
+      amount: totalCharge * 100,
       reference: rawRef,
       metadata: {
         txnId,
