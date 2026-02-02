@@ -170,7 +170,7 @@ export class AnalyticsService {
       {
         $match: {
           $expr: {
-            $eq: ["$ticketInfo.title", "$eventData.tickets.title"],
+            $eq: ["$ticket", "$eventData.tickets._id"],
           },
         },
       },
