@@ -102,7 +102,7 @@ export const purchaseTicket = async (req: Request, res: Response) => {
         txnId,
         transactionId: transaction._id
       },
-      callback_url: "https://decave-demo.vercel.app/checkout/success"
+      callback_url: "http://localhost:7000/checkout/success"
     });
 
     res.status(200).json({

@@ -2,6 +2,8 @@ import { Request, Response } from "express";
 import paystack from "../services/paystack.service";
 import transactionHistoryModel from "../models/transactionHistory.model";
 import eventModel from "../models/event.model";
+import { transporter } from "../config/mailer";
+import { generateTicketPDF, ticketEmailTemplate } from "../utils/ticketEmailTemplate";
 
 export const verifyTicketPayment = async (req: Request, res: Response) => {
   try {
@@ -35,26 +37,53 @@ export const verifyTicketPayment = async (req: Request, res: Response) => {
 
     // 4️⃣ Deduct ticket quantity + fetch details
     const event = await eventModel.findById(transaction.event);
-
+    
     if (!event) {
       return res.status(404).json({ message: "Event not found" });
     }
-
+    
     const ticket = event.tickets.find(
       (t: any) => t._id.toString() === transaction.ticket.toString()
     );
-
+    
     if (!ticket) {
       return res.status(404).json({ message: "Ticket not found in event" });
     }
-
+    
     ticket.availableQuantity = Math.max(
       ticket.availableQuantity - transaction.buyers.length,
       0
     );
-
+    
     await event.save();
+    
+    transaction.buyers.forEach(async (buyer: any) => {
+  try {
 
+    const pdfBuffer = await generateTicketPDF({ buyer, event: event.eventDetails, ticket, transaction });
+
+    await transporter.sendMail({
+      from: `"DCave Tickets" <no-reply@dcave.com>`,
+      to: buyer.email,
+      subject: `🎟 Your Ticket for ${event.eventDetails.eventTitle}`,
+      html: ticketEmailTemplate({
+        buyer,
+        event: event.eventDetails,
+        ticket,
+        transaction
+      }),
+      attachments: [
+      {
+        filename: `DCave-Ticket-${buyer.ticketId}.pdf`,
+        content: pdfBuffer,
+        contentType: 'application/pdf'
+      }
+    ]
+    });
+  } catch (err) {
+    console.error("Email failed for:", buyer.email, err);
+  }
+});
     // 5️⃣ RESPONSE PAYLOAD (clean + frontend-ready)
     res.status(200).json({
       success: true,
