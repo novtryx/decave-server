@@ -12,7 +12,7 @@ const generateBuyerTicketId = (ticketName: string) => {
 };
 
 const calculatePaystackCharge = (amount: number) => {
-  const percentage = 0.015 * amount;
+  const percentage = 0 * amount;
   const charge = percentage + 100;
   return Math.min(charge, 2000);
 };
@@ -102,7 +102,7 @@ export const purchaseTicket = async (req: Request, res: Response) => {
         txnId,
         transactionId: transaction._id
       },
-      callback_url: "http://localhost:7000/checkout/success"
+      callback_url: "https://decave-demo.vercel.app/checkout/success"
     });
 
     res.status(200).json({
