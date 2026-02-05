@@ -4,6 +4,11 @@ import transactionHistoryModel from "../models/transactionHistory.model";
 import eventModel from "../models/event.model";
 import { transporter } from "../config/mailer";
 import { generateTicketPDF, ticketEmailTemplate } from "../utils/ticketEmailTemplate";
+import { Resend } from "resend";
+
+
+const resend = new Resend(process.env.RESEND_API_KEY);
+
 
 export const verifyTicketPayment = async (req: Request, res: Response) => {
   try {
@@ -57,15 +62,20 @@ export const verifyTicketPayment = async (req: Request, res: Response) => {
     
     await event.save();
     
-    transaction.buyers.forEach(async (buyer: any) => {
+    for (const buyer of transaction.buyers) {
   try {
+    const pdfBuffer = await generateTicketPDF({
+      buyer,
+      event: event.eventDetails,
+      ticket,
+      transaction
+    });
 
-    const pdfBuffer = await generateTicketPDF({ buyer, event: event.eventDetails, ticket, transaction });
-
-    await transporter.sendMail({
-      from: `"DCave Tickets" <no-reply@dcave.com>`,
+    await resend.emails.send({
+      from: "DeCave Tickets <no-reply@decave.com>",
       to: buyer.email,
-      subject: `🎟 Your Ticket for ${event.eventDetails.eventTitle}`,
+      replyTo: "support@decave.com",
+      subject: `Your Ticket for ${event.eventDetails.eventTitle}`,
       html: ticketEmailTemplate({
         buyer,
         event: event.eventDetails,
@@ -73,17 +83,18 @@ export const verifyTicketPayment = async (req: Request, res: Response) => {
         transaction
       }),
       attachments: [
-      {
-        filename: `DCave-Ticket-${buyer.ticketId}.pdf`,
-        content: pdfBuffer,
-        contentType: 'application/pdf'
-      }
-    ]
+        {
+          filename: `Ticket-${buyer.ticketId}.pdf`,
+          content: pdfBuffer.toString("base64"),
+          contentType: "application/pdf"
+        }
+      ]
     });
   } catch (err) {
-    console.error("Email failed for:", buyer.email, err);
+    console.log("Email failed for:", buyer.email, err);
   }
-});
+}
+
     // 5️⃣ RESPONSE PAYLOAD (clean + frontend-ready)
     res.status(200).json({
       success: true,
