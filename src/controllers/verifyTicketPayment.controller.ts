@@ -71,25 +71,27 @@ export const verifyTicketPayment = async (req: Request, res: Response) => {
       transaction
     });
 
-    await resend.emails.send({
-      from: "DeCave Tickets <no-reply@decave.com>",
-      to: buyer.email,
-      replyTo: "support@decave.com",
-      subject: `Your Ticket for ${event.eventDetails.eventTitle}`,
-      html: ticketEmailTemplate({
-        buyer,
-        event: event.eventDetails,
-        ticket,
-        transaction
-      }),
-      attachments: [
-        {
-          filename: `Ticket-${buyer.ticketId}.pdf`,
-          content: pdfBuffer.toString("base64"),
-          contentType: "application/pdf"
-        }
-      ]
-    });
+    const result = await resend.emails.send({
+  from: "DeCave Tickets <no-reply@decavemgt.com>",
+  to: buyer.email,
+  replyTo: "support@decavemgt.com",
+  subject: `Your Ticket for ${event.eventDetails.eventTitle}`,
+  html: ticketEmailTemplate({
+    buyer,
+    event: event.eventDetails,
+    ticket,
+    transaction
+  }),
+  attachments: [
+    {
+      filename: `Ticket-${buyer.ticketId}.pdf`,
+      content: pdfBuffer.toString("base64"),
+      contentType: "application/pdf"
+    }
+  ]
+});
+
+console.log("Resend result:", result);
   } catch (err) {
     console.log("Email failed for:", buyer.email, err);
   }

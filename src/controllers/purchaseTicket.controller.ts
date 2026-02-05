@@ -13,7 +13,7 @@ const generateBuyerTicketId = (ticketName: string) => {
 
 const calculatePaystackCharge = (amount: number) => {
   const percentage = 0 * amount;
-  const charge = percentage + 100;
+  const charge = percentage ;
   return Math.min(charge, 2000);
 };
 
@@ -65,7 +65,7 @@ export const purchaseTicket = async (req: Request, res: Response) => {
       for (let i = 0; i < qty; i++) {
         const buyerTicketId = generateBuyerTicketId(event.eventDetails.eventTitle);
         // const qrPayload = `EVENT:${event.eventDetails.eventTitle}|TXN:${txnId}|TICKET:${buyerTicketId}`;
-        const qrPayload =`http://localhost:3000/ticket?txnId=${txnId}&ticketId=${buyerTicketId}`
+        const qrPayload =`https://decavemgt.com/ticket?txnId=${txnId}&ticketId=${buyerTicketId}`
         const qrCode = await QRCode.toDataURL(qrPayload);
 
 
@@ -102,7 +102,7 @@ export const purchaseTicket = async (req: Request, res: Response) => {
         txnId,
         transactionId: transaction._id
       },
-      callback_url: "https://decave.com/checkout/success"
+      callback_url: "https://decavemgt.com/checkout/success"
     });
 
     res.status(200).json({

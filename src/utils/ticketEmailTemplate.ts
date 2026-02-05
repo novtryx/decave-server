@@ -173,7 +173,7 @@ export const ticketEmailTemplate = ({
       <!-- Footer -->
       <div style="text-align:center;padding:20px 0;border-top:1px solid #27272A">
         <p style="margin:0 0 8px;color:#666;font-size:12px">
-          Questions? Contact <a href="mailto:support@decave.com" style="color:#CCA33A;text-decoration:none">support@decave.com</a>
+          Questions? Contact <a href="mailto:support@decavemgt.com" style="color:#CCA33A;text-decoration:none">support@decavemgt.com</a>
         </p>
         <p style="margin:0;color:#666;font-size:11px">© 2026 DeCave. All rights reserved.</p>
       </div>
