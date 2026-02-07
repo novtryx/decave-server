@@ -17,7 +17,7 @@ const formatDate = (date: string) => {
       hour12: true
     });
   };
- const logo = `${process.env.APP_URL}/decave-logo.svg`;
+ const logo = `${process.env.APP_URL}/decave-logo.png`;
 
 export const generateTicketPDF = async ({
   buyer,
