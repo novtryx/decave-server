@@ -22,7 +22,7 @@ export const dashboardData = async (req: Request, res: Response) => {
       success: true,
       upcomingEvents: upcoming,
       ticketSale: transactionStat.ticketsSold,
-      revenue: transactionStat.revenue,
+      revnue: transactionStat.revenue,
       activeEvents: ticketStat.activeEvents,
       recentActivities: notification,
       avgTicketPrice: ticketStat.averageTicketPrice,
