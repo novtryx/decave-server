@@ -5,6 +5,7 @@ import eventModel from "../models/event.model";
 import { transporter } from "../config/mailer";
 import { generateTicketPDF, ticketEmailTemplate } from "../utils/ticketEmailTemplate";
 import { Resend } from "resend";
+import transactionService from "../services/transaction.service";
 
 
 const resend = new Resend(process.env.RESEND_API_KEY);
@@ -61,7 +62,8 @@ export const verifyTicketPayment = async (req: Request, res: Response) => {
     );
     
     await event.save();
-    
+    await transactionService.invalidateDashboardCache();
+
     for (const buyer of transaction.buyers) {
   try {
     const pdfBuffer = await generateTicketPDF({

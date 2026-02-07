@@ -1,65 +1,62 @@
-import { connectDB } from "../config/database";
-import eventModel from "../models/event.model";
 import transactionHistoryModel from "../models/transactionHistory.model";
+import { getRedisClient } from "../config/redis";
+
+const DASHBOARD_CACHE_KEY = "dashboard:stats";
+const DASHBOARD_CACHE_TTL = 60; // seconds
 
 export class TransactionService {
-    private async ensureConnection() {
-        await connectDB();
-    }
-
-    async getAllTransactions(page: number = 1, limit: number = 10) {
-  try {
-    await this.ensureConnection();
-
+  /**
+   * ===============================
+   * TRANSACTIONS LIST + TOTALS
+   * ===============================
+   */
+  async getAllTransactions(page = 1, limit = 10) {
     const skip = (page - 1) * limit;
 
     const [result] = await transactionHistoryModel.aggregate([
-      {
-        $lookup: {
-          from: "events",
-          localField: "event",
-          foreignField: "_id",
-          as: "event"
-        }
-      },
-      { $unwind: "$event" },
-
-      // 🔹 Resolve ticket from event.tickets
-      {
-        $addFields: {
-          ticketInfo: {
-            $first: {
-              $filter: {
-                input: "$event.tickets",
-                as: "t",
-                cond: { $eq: ["$$t._id", "$ticket"] }
-              }
-            }
-          },
-          quantity: { $size: "$buyers" }
-        }
-      },
-
-      // 🔹 Compute revenue per transaction
-      {
-        $addFields: {
-          revenue: {
-            $cond: [
-              { $eq: ["$status", "completed"] },
-              { $multiply: ["$quantity", "$ticketInfo.price"] },
-              0
-            ]
-          }
-        }
-      },
-
+      { $sort: { createdAt: -1 } },
       {
         $facet: {
-          // ================= HISTORY =================
           history: [
-            { $sort: { createdAt: -1 } },
             { $skip: skip },
             { $limit: limit },
+
+            {
+              $lookup: {
+                from: "events",
+                localField: "event",
+                foreignField: "_id",
+                as: "event"
+              }
+            },
+            { $unwind: "$event" },
+
+            {
+              $addFields: {
+                ticketInfo: {
+                  $first: {
+                    $filter: {
+                      input: "$event.tickets",
+                      as: "t",
+                      cond: { $eq: ["$$t._id", "$ticket"] }
+                    }
+                  }
+                },
+                quantity: { $size: "$buyers" }
+              }
+            },
+
+            {
+              $addFields: {
+                revenue: {
+                  $cond: [
+                    { $eq: ["$status", "completed"] },
+                    { $multiply: ["$quantity", "$ticketInfo.price"] },
+                    0
+                  ]
+                }
+              }
+            },
 
             {
               $project: {
@@ -76,7 +73,6 @@ export class TransactionService {
             }
           ],
 
-          // ================= TOTALS =================
           totals: [
             {
               $group: {
@@ -95,192 +91,201 @@ export class TransactionService {
             }
           ],
 
-          // ================= COUNT =================
-          count: [
-            { $count: "total" }
-          ]
+          count: [{ $count: "total" }]
         }
       }
     ]);
 
+    const totals = result.totals[0] || {
+      totalRevenue: 0,
+      totalPending: 0,
+      totalFailed: 0,
+      totalCompleted: 0
+    };
+
+    const total = result.count[0]?.total || 0;
+
     return {
-      totals: result.totals[0] || {
-        totalRevenue: 0,
-        totalPending: 0,
-        totalFailed: 0,
-        totalCompleted: 0
-      },
+      totals,
       history: result.history,
       pagination: {
-        total: result.count[0]?.total || 0,
+        total,
         page,
         limit,
-        pages: Math.ceil((result.count[0]?.total || 0) / limit),
-        hasNext: page * limit < (result.count[0]?.total || 0),
+        pages: Math.ceil(total / limit),
+        hasNext: page * limit < total,
         hasPrev: page > 1
       }
     };
-  } catch (error: any) {
-    throw new Error(`Error fetching transactions: ${error.message}`);
   }
-}
 
+  /**
+   * ===============================
+   * TICKETS SOLD (MONTHLY)
+   * ===============================
+   */
+  private async getTicketsSoldStats() {
+    const now = new Date();
+    const currentMonth = now.getMonth() + 1;
+    const currentYear = now.getFullYear();
 
-    /**
-     * Get total tickets sold with percentage change compared to last month
-     */
-    async getTicketsSoldStats() {
-        try {
-            await this.ensureConnection();
-
-            const now = new Date();
-            const currentMonthStart = new Date(now.getFullYear(), now.getMonth(), 1);
-            const lastMonthStart = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-            const lastMonthEnd = new Date(now.getFullYear(), now.getMonth(), 0, 23, 59, 59, 999);
-
-            // Get current month tickets sold (successful transactions only)
-            const currentMonthTickets = await transactionHistoryModel.countDocuments({
-                status: "completed",
-                createdAt: { $gte: currentMonthStart }
-            });
-
-            // Get last month tickets sold
-            const lastMonthTickets = await transactionHistoryModel.countDocuments({
-                status: "completed",
-                createdAt: { 
-                    $gte: lastMonthStart,
-                    $lte: lastMonthEnd
-                }
-            });
-
-            // Calculate percentage change
-            let percentageChange = 0;
-            if (lastMonthTickets > 0) {
-                percentageChange = ((currentMonthTickets - lastMonthTickets) / lastMonthTickets) * 100;
-            } else if (currentMonthTickets > 0) {
-                percentageChange = 100; // If last month was 0 and current month has sales
-            }
-
-            return {
-                currentMonth: currentMonthTickets,
-                lastMonth: lastMonthTickets,
-                percentageChange: parseFloat(percentageChange.toFixed(2)),
-                trend: percentageChange > 0 ? "up" : percentageChange < 0 ? "down" : "stable"
-            };
-        } catch (error: any) {
-            throw new Error(`Error fetching tickets sold stats: ${error.message}`);
+    const stats = await transactionHistoryModel.aggregate([
+      {
+        $match: {
+          status: "completed"
         }
-    }
-
-    /**
-     * Get total revenue with percentage change compared to last month
-     */
-    async getRevenueStats() {
-        try {
-            await this.ensureConnection();
-
-            const now = new Date();
-            const currentMonthStart = new Date(now.getFullYear(), now.getMonth(), 1);
-            const lastMonthStart = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-            const lastMonthEnd = new Date(now.getFullYear(), now.getMonth(), 0, 23, 59, 59, 999);
-
-            // Get current month revenue
-            const currentMonthRevenue = await this.calculateRevenue(currentMonthStart, now);
-
-            // Get last month revenue
-            const lastMonthRevenue = await this.calculateRevenue(lastMonthStart, lastMonthEnd);
-
-            // Calculate percentage change
-            let percentageChange = 0;
-            if (lastMonthRevenue > 0) {
-                percentageChange = ((currentMonthRevenue - lastMonthRevenue) / lastMonthRevenue) * 100;
-            } else if (currentMonthRevenue > 0) {
-                percentageChange = 100;
-            }
-
-            return {
-                currentMonth: parseFloat(currentMonthRevenue.toFixed(2)),
-                lastMonth: parseFloat(lastMonthRevenue.toFixed(2)),
-                percentageChange: parseFloat(percentageChange.toFixed(2)),
-                trend: percentageChange > 0 ? "up" : percentageChange < 0 ? "down" : "stable",
-                currency: "NGN" // Adjust based on your currency
-            };
-        } catch (error: any) {
-            throw new Error(`Error fetching revenue stats: ${error.message}`);
+      },
+      {
+        $group: {
+          _id: {
+            month: { $month: "$createdAt" },
+            year: { $year: "$createdAt" }
+          },
+          count: { $sum: 1 }
         }
-    }
+      }
+    ]);
 
-    /**
-     * Helper method to calculate revenue for a date range
-     */
-  private async calculateRevenue(startDate: Date, endDate: Date): Promise<number> {
-  const result = await transactionHistoryModel.aggregate([
-    {
-      $match: {
-        status: "completed",
-        createdAt: { $gte: startDate, $lte: endDate }
-      }
-    },
-    {
-      $lookup: {
-        from: "events",
-        localField: "event",
-        foreignField: "_id",
-        as: "event"
-      }
-    },
-    { $unwind: "$event" },
-    {
-      $addFields: {
-        ticketInfo: {
-          $first: {
-            $filter: {
-              input: "$event.tickets",
-              as: "t",
-              cond: { $eq: ["$$t._id", "$ticket"] }
+    const current = stats.find(
+      s => s._id.month === currentMonth && s._id.year === currentYear
+    )?.count || 0;
+
+    const last = stats.find(
+      s => s._id.month === currentMonth - 1 && s._id.year === currentYear
+    )?.count || 0;
+
+    const percentageChange =
+      last > 0 ? ((current - last) / last) * 100 : current > 0 ? 100 : 0;
+
+    return {
+      currentMonth: current,
+      lastMonth: last,
+      percentageChange: Number(percentageChange.toFixed(2)),
+      trend:
+        percentageChange > 0 ? "up" : percentageChange < 0 ? "down" : "stable"
+    };
+  }
+
+  /**
+   * ===============================
+   * REVENUE (MONTHLY)
+   * ===============================
+   */
+  private async getRevenueStats() {
+    const now = new Date();
+    const currentMonth = now.getMonth() + 1;
+    const currentYear = now.getFullYear();
+
+    const stats = await transactionHistoryModel.aggregate([
+      {
+        $match: {
+          status: "completed"
+        }
+      },
+      {
+        $lookup: {
+          from: "events",
+          localField: "event",
+          foreignField: "_id",
+          as: "event"
+        }
+      },
+      { $unwind: "$event" },
+
+      {
+        $addFields: {
+          ticketInfo: {
+            $first: {
+              $filter: {
+                input: "$event.tickets",
+                as: "t",
+                cond: { $eq: ["$$t._id", "$ticket"] }
+              }
             }
-          }
-        },
-        quantity: { $size: "$buyers" }
-      }
-    },
-    {
-      $group: {
-        _id: null,
-        totalRevenue: {
-          $sum: {
-            $multiply: ["$quantity", "$ticketInfo.price"]
+          },
+          quantity: { $size: "$buyers" }
+        }
+      },
+
+      {
+        $group: {
+          _id: {
+            month: { $month: "$createdAt" },
+            year: { $year: "$createdAt" }
+          },
+          revenue: {
+            $sum: { $multiply: ["$quantity", "$ticketInfo.price"] }
           }
         }
       }
+    ]);
+
+    const current = stats.find(
+      s => s._id.month === currentMonth && s._id.year === currentYear
+    )?.revenue || 0;
+
+    const last = stats.find(
+      s => s._id.month === currentMonth - 1 && s._id.year === currentYear
+    )?.revenue || 0;
+
+    const percentageChange =
+      last > 0 ? ((current - last) / last) * 100 : current > 0 ? 100 : 0;
+
+    return {
+      currentMonth: Number(current.toFixed(2)),
+      lastMonth: Number(last.toFixed(2)),
+      percentageChange: Number(percentageChange.toFixed(2)),
+      trend:
+        percentageChange > 0 ? "up" : percentageChange < 0 ? "down" : "stable",
+      currency: "NGN"
+    };
+  }
+
+  /**
+   * ===============================
+   * DASHBOARD (CACHED)
+   * ===============================
+   */
+  async getDashboardStats() {
+    const redis = await getRedisClient();
+
+    // 🔹 Try cache first
+    const cached = await redis.get(DASHBOARD_CACHE_KEY);
+    if (cached) {
+      return JSON.parse(cached);
     }
-  ]);
 
-  return result[0]?.totalRevenue || 0;
-}
+    // 🔹 Compute fresh
+    const [ticketsSold, revenue] = await Promise.all([
+      this.getTicketsSoldStats(),
+      this.getRevenueStats()
+    ]);
 
+    const data = {
+      ticketsSold,
+      revenue,
+      generatedAt: new Date()
+    };
 
-    /**
-     * Get combined dashboard stats
-     */
-    async getDashboardStats() {
-        try {
-            await this.ensureConnection();
+    // 🔹 Save to Redis
+    await redis.setEx(
+      DASHBOARD_CACHE_KEY,
+      DASHBOARD_CACHE_TTL,
+      JSON.stringify(data)
+    );
 
-            const [ticketStats, revenueStats] = await Promise.all([
-                this.getTicketsSoldStats(),
-                this.getRevenueStats()
-            ]);
+    return data;
+  }
 
-            return {
-                ticketsSold: ticketStats,
-                revenue: revenueStats,
-                generatedAt: new Date()
-            };
-        } catch (error: any) {
-            throw new Error(`Error fetching dashboard stats: ${error.message}`);
-        }
-    }
+  /**
+   * ===============================
+   * CACHE INVALIDATION
+   * ===============================
+   */
+  async invalidateDashboardCache() {
+    const redis = await getRedisClient();
+    await redis.del(DASHBOARD_CACHE_KEY);
+  }
 }
 
 export default new TransactionService();
