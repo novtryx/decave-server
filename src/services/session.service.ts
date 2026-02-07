@@ -2,32 +2,30 @@ import { UAParser } from "ua-parser-js";
 import geoip from "geoip-lite";
 import { Request } from "express";
 import { SessionData } from "../types/service.type";
-import { getRedisClient } from './../config/redis';
-
-
+import { getRedisClient } from "../config/redis";
 
 export class SessionService {
   private SESSION_PREFIX = "session:";
   private USER_SESSIONS_PREFIX = "user_sessions:";
   private SESSION_EXPIRY = 7 * 24 * 60 * 60; // 7 days in seconds
 
-  private async ensureRedisConnection(): Promise<void> {
-    const redisClient = await getRedisClient(); // Get client on demand
+  // Singleton Redis client
+  private redisClient: any;
 
-    if (!redisClient) {
-      throw new Error("Redis client is not initialized");
+  private async getClient() {
+    if (!this.redisClient) {
+      this.redisClient = await getRedisClient();
+      if (!this.redisClient.isOpen) await this.redisClient.connect();
     }
-
-    // Check if client is ready
-    if (!redisClient.isOpen) {
-      await redisClient.connect();
-    }
+    return this.redisClient;
   }
-  // Extract device info from User-Agent
+
+  // -----------------------------
+  // Device & location utilities
+  // -----------------------------
   private getDeviceInfo(userAgent: string) {
     const parser = new UAParser(userAgent);
     const result = parser.getResult();
-
     return {
       browser: `${result.browser.name || "Unknown"} ${result.browser.version || ""}`.trim(),
       os: `${result.os.name || "Unknown"} ${result.os.version || ""}`.trim(),
@@ -35,13 +33,9 @@ export class SessionService {
     };
   }
 
-  // Get location from IP address
   private getLocationFromIP(ip: string) {
-    // Remove IPv6 prefix if present
     const cleanIP = ip.replace(/^::ffff:/, "");
-
     const geo = geoip.lookup(cleanIP);
-
     if (geo) {
       return {
         city: geo.city || "Unknown",
@@ -50,300 +44,180 @@ export class SessionService {
         timezone: geo.timezone || "Unknown",
       };
     }
-
-    // Default location if IP lookup fails
-    return {
-      city: "Unknown",
-      region: "Unknown",
-      country: "Unknown",
-      timezone: "Unknown",
-    };
+    return { city: "Unknown", region: "Unknown", country: "Unknown", timezone: "Unknown" };
   }
 
-  // Get client IP address
-  private getClientIP(req: Request): string {
-    // Check various headers for real IP
+  private getClientIP(req: Request) {
     const forwarded = req.headers["x-forwarded-for"];
-    if (forwarded) {
-      return (forwarded as string).split(",")[0].trim();
-    }
-
+    if (forwarded) return (forwarded as string).split(",")[0].trim();
     const realIP = req.headers["x-real-ip"];
-    if (realIP) {
-      return realIP as string;
-    }
-
+    if (realIP) return realIP as string;
     return req.ip || req.socket.remoteAddress || "Unknown";
   }
 
-  // Create new session
-  async createSession(
-    userId: string,
-    email: string,
-    token: string,
-    req: Request
-  ): Promise<SessionData> {
-    try {
-      const redisClient = await getRedisClient(); // Get client on demand
+  // -----------------------------
+  // Create a new session
+  // -----------------------------
+  async createSession(userId: string, email: string, token: string, req: Request): Promise<SessionData> {
+    const redis = await this.getClient();
 
+    const userAgent = req.headers["user-agent"] || "Unknown";
+    const ipAddress = this.getClientIP(req);
+    const deviceInfo = this.getDeviceInfo(userAgent);
+    const location = this.getLocationFromIP(ipAddress);
+    const now = new Date().toISOString();
 
+    const sessionData: SessionData = {
+      userId,
+      email,
+      deviceInfo,
+      location,
+      ipAddress,
+      loginTime: now,
+      lastActive: now,
+      token,
+      isCurrent: true,
+    };
 
-      const userAgent = req.headers["user-agent"] || "Unknown";
-      const ipAddress = this.getClientIP(req);
-      const deviceInfo = this.getDeviceInfo(userAgent);
-      const location = this.getLocationFromIP(ipAddress);
-      const now = new Date().toISOString();
+    const sessionId = `${this.SESSION_PREFIX}${userId}:${Date.now()}`;
 
-      const sessionData: SessionData = {
-        userId,
-        email,
-        deviceInfo,
-        location,
-        ipAddress,
-        loginTime: now,
-        lastActive: now,
-        token,
-        isCurrent: true,
-      };
+    await redis.setEx(sessionId, this.SESSION_EXPIRY, JSON.stringify(sessionData));
+    await redis.sAdd(`${this.USER_SESSIONS_PREFIX}${userId}`, sessionId);
+    await redis.expire(`${this.USER_SESSIONS_PREFIX}${userId}`, this.SESSION_EXPIRY);
 
-      // Generate unique session ID
-      const sessionId = `${this.SESSION_PREFIX}${userId}:${Date.now()}`;
-
-      // Store session data
-      await redisClient.setEx(
-        sessionId,
-        this.SESSION_EXPIRY,
-        JSON.stringify(sessionData)
-      );
-
-      // Add session to user's session list
-      await redisClient.sAdd(`${this.USER_SESSIONS_PREFIX}${userId}`, sessionId);
-
-      // Set expiry on user sessions set
-      await redisClient.expire(
-        `${this.USER_SESSIONS_PREFIX}${userId}`,
-        this.SESSION_EXPIRY
-      );
-
-      return sessionData;
-    } catch (error: any) {
-      throw new Error(`Error creating session: ${error.message}`);
-    }
+    return sessionData;
   }
 
+  // -----------------------------
   // Get all user sessions
+  // -----------------------------
   async getUserSessions(userId: string, currentToken?: string): Promise<SessionData[]> {
-    try {
-      const redisClient = await getRedisClient(); // Get client on demand
+    const redis = await this.getClient();
+    const sessionKeys = await redis.sMembers(`${this.USER_SESSIONS_PREFIX}${userId}`);
+    const sessions: SessionData[] = [];
 
+    if (!sessionKeys || sessionKeys.length === 0) return sessions;
 
-      const sessionKeys = await redisClient.sMembers(
-        `${this.USER_SESSIONS_PREFIX}${userId}`
-      );
+    const pipeline = redis.multi();
+    sessionKeys.forEach((key: string) => pipeline.get(key));
+    const results = await pipeline.exec();
 
-      const sessions: SessionData[] = [];
-
-      for (const sessionKey of sessionKeys) {
-        const sessionData = await redisClient.get(sessionKey);
-        if (sessionData) {
-          const session: SessionData = JSON.parse(sessionData);
-
-          // Mark current session
-          session.isCurrent = currentToken ? session.token === currentToken : false;
-
-          sessions.push(session);
-        } else {
-          // Remove expired session from set
-          await redisClient.sRem(
-            `${this.USER_SESSIONS_PREFIX}${userId}`,
-            sessionKey
-          );
-        }
+    for (let i = 0; i < sessionKeys.length; i++) {
+      const data = results[i]?.[1];
+      if (!data) {
+        // Remove expired session
+        await redis.sRem(`${this.USER_SESSIONS_PREFIX}${userId}`, sessionKeys[i]);
+        continue;
       }
-
-      // Sort by last active (most recent first)
-      return sessions.sort(
-        (a, b) =>
-          new Date(b.lastActive).getTime() - new Date(a.lastActive).getTime()
-      );
-    } catch (error: any) {
-      throw new Error(`Error getting user sessions: ${error.message}`);
+      const session: SessionData = JSON.parse(data);
+      session.isCurrent = currentToken ? session.token === currentToken : false;
+      sessions.push(session);
     }
+
+    // Sort by lastActive descending
+    return sessions.sort((a, b) => new Date(b.lastActive).getTime() - new Date(a.lastActive).getTime());
   }
 
-  // Update session last active time
-  async updateSessionActivity(userId: string, token: string): Promise<void> {
-    try {
-      const redisClient = await getRedisClient(); // Get client on demand
+  // -----------------------------
+  // Verify and update session in one call
+  // -----------------------------
+  async verifyAndUpdateSession(userId: string, token: string): Promise<boolean> {
+    const redis = await this.getClient();
+    const sessionKeys = await redis.sMembers(`${this.USER_SESSIONS_PREFIX}${userId}`);
 
-
-      const sessionKeys = await redisClient.sMembers(
-        `${this.USER_SESSIONS_PREFIX}${userId}`
-      );
-
-      for (const sessionKey of sessionKeys) {
-        const sessionData = await redisClient.get(sessionKey);
-        if (sessionData) {
-          const session: SessionData = JSON.parse(sessionData);
-
-          if (session.token === token) {
-            session.lastActive = new Date().toISOString();
-
-            await redisClient.setEx(
-              sessionKey,
-              this.SESSION_EXPIRY,
-              JSON.stringify(session)
-            );
-            break;
-          }
-        }
+    for (const key of sessionKeys) {
+      const data = await redis.get(key);
+      if (!data) {
+        await redis.sRem(`${this.USER_SESSIONS_PREFIX}${userId}`, key);
+        continue;
       }
-    } catch (error: any) {
-      throw new Error(`Error updating session activity: ${error.message}`);
+
+      const session: SessionData = JSON.parse(data);
+      if (session.token === token) {
+        session.lastActive = new Date().toISOString();
+        await redis.setEx(key, this.SESSION_EXPIRY, JSON.stringify(session));
+        return true;
+      }
     }
+
+    return false;
   }
 
+  // -----------------------------
   // Revoke specific session
+  // -----------------------------
   async revokeSession(userId: string, token: string): Promise<boolean> {
-    try {
-      const redisClient = await getRedisClient(); // Get client on demand
+    const redis = await this.getClient();
+    const sessionKeys = await redis.sMembers(`${this.USER_SESSIONS_PREFIX}${userId}`);
 
-
-      const sessionKeys = await redisClient.sMembers(
-        `${this.USER_SESSIONS_PREFIX}${userId}`
-      );
-
-      for (const sessionKey of sessionKeys) {
-        const sessionData = await redisClient.get(sessionKey);
-        if (sessionData) {
-          const session: SessionData = JSON.parse(sessionData);
-
-          if (session.token === token) {
-            await redisClient.del(sessionKey);
-            await redisClient.sRem(
-              `${this.USER_SESSIONS_PREFIX}${userId}`,
-              sessionKey
-            );
-            return true;
-          }
-        }
+    for (const key of sessionKeys) {
+      const data = await redis.get(key);
+      if (!data) continue;
+      const session: SessionData = JSON.parse(data);
+      if (session.token === token) {
+        await redis.del(key);
+        await redis.sRem(`${this.USER_SESSIONS_PREFIX}${userId}`, key);
+        return true;
       }
-
-      return false;
-    } catch (error: any) {
-      throw new Error(`Error revoking session: ${error.message}`);
     }
+    return false;
   }
 
-  // Revoke all sessions except current
+  // -----------------------------
+  // Revoke all other sessions except current
+  // -----------------------------
   async revokeAllOtherSessions(userId: string, currentToken: string): Promise<number> {
-    try {
-      const redisClient = await getRedisClient(); // Get client on demand
+    const redis = await this.getClient();
+    const sessionKeys = await redis.sMembers(`${this.USER_SESSIONS_PREFIX}${userId}`);
+    let revoked = 0;
 
-
-      const sessionKeys = await redisClient.sMembers(
-        `${this.USER_SESSIONS_PREFIX}${userId}`
-      );
-
-      let revokedCount = 0;
-
-      for (const sessionKey of sessionKeys) {
-        const sessionData = await redisClient.get(sessionKey);
-        if (sessionData) {
-          const session: SessionData = JSON.parse(sessionData);
-
-          if (session.token !== currentToken) {
-            await redisClient.del(sessionKey);
-            await redisClient.sRem(
-              `${this.USER_SESSIONS_PREFIX}${userId}`,
-              sessionKey
-            );
-            revokedCount++;
-          }
-        }
+    for (const key of sessionKeys) {
+      const data = await redis.get(key);
+      if (!data) continue;
+      const session: SessionData = JSON.parse(data);
+      if (session.token !== currentToken) {
+        await redis.del(key);
+        await redis.sRem(`${this.USER_SESSIONS_PREFIX}${userId}`, key);
+        revoked++;
       }
-
-      return revokedCount;
-    } catch (error: any) {
-      throw new Error(`Error revoking other sessions: ${error.message}`);
     }
+    return revoked;
   }
 
-  // Revoke all user sessions
+  // -----------------------------
+  // Revoke all sessions
+  // -----------------------------
   async revokeAllSessions(userId: string): Promise<number> {
-    try {
-      const redisClient = await getRedisClient(); // Get client on demand
+    const redis = await this.getClient();
+    const sessionKeys = await redis.sMembers(`${this.USER_SESSIONS_PREFIX}${userId}`);
+    if (!sessionKeys) return 0;
 
-      const sessionKeys = await redisClient.sMembers(
-        `${this.USER_SESSIONS_PREFIX}${userId}`
-      );
+    const pipeline = redis.multi();
+    sessionKeys.forEach((key: any) => pipeline.del(key));
+    pipeline.del(`${this.USER_SESSIONS_PREFIX}${userId}`);
+    await pipeline.exec();
 
-      for (const sessionKey of sessionKeys) {
-        await redisClient.del(sessionKey);
-      }
-
-      await redisClient.del(`${this.USER_SESSIONS_PREFIX}${userId}`);
-
-      return sessionKeys.length;
-    } catch (error: any) {
-      throw new Error(`Error revoking all sessions: ${error.message}`);
-    }
+    return sessionKeys.length;
   }
 
-  // Check if session exists
-  async sessionExists(userId: string, token: string): Promise<boolean> {
-    try {
-      const redisClient = await getRedisClient(); // Get client on demand
-
-      const sessionKeys = await redisClient.sMembers(
-        `${this.USER_SESSIONS_PREFIX}${userId}`
-      );
-
-      for (const sessionKey of sessionKeys) {
-        const sessionData = await redisClient.get(sessionKey);
-        if (sessionData) {
-          const session: SessionData = JSON.parse(sessionData);
-          if (session.token === token) {
-            return true;
-          }
-        }
-      }
-
-      return false;
-    } catch (error: any) {
-      throw new Error(`Error checking session: ${error.message}`);
-    }
-  }
-
+  // -----------------------------
   // Get active sessions count
+  // -----------------------------
   async getActiveSessionsCount(userId: string): Promise<number> {
-    try {
-      const redisClient = await getRedisClient(); // Get client on demand
+    const redis = await this.getClient();
+    const sessionKeys = await redis.sMembers(`${this.USER_SESSIONS_PREFIX}${userId}`);
+    if (!sessionKeys || sessionKeys.length === 0) return 0;
 
+    const pipeline = redis.multi();
+    sessionKeys.forEach((key: any) => pipeline.exists(key));
+    const results = await pipeline.exec();
 
-      const sessionKeys = await redisClient.sMembers(
-        `${this.USER_SESSIONS_PREFIX}${userId}`
-      );
-
-      let activeCount = 0;
-
-      for (const sessionKey of sessionKeys) {
-        const exists = await redisClient.exists(sessionKey);
-        if (exists) {
-          activeCount++;
-        } else {
-          // Clean up expired session
-          await redisClient.sRem(
-            `${this.USER_SESSIONS_PREFIX}${userId}`,
-            sessionKey
-          );
-        }
-      }
-
-      return activeCount;
-    } catch (error: any) {
-      throw new Error(`Error getting active sessions count: ${error.message}`);
+    let count = 0;
+    for (const res of results) {
+      if (res[1]) count++;
     }
+
+    return count;
   }
 }
 

@@ -57,7 +57,7 @@ const PartnerSchema = new Schema<IPartner>(
     associatedEvents: [{ 
       type: Schema.Types.ObjectId, 
       ref: "Event",
-      index: true
+      // index: true
     }],
     partnershipStartDate: { 
       type: Date, 

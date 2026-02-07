@@ -45,7 +45,7 @@ const TransactionHistorySchema = new Schema<ITransactionHistory>(
       required: true,
       unique: true,
       trim: true,
-      index: true,
+      // index: true,
     },
     event: {
       type: Schema.Types.ObjectId,

@@ -3,62 +3,60 @@ import jwt from "jsonwebtoken";
 import { JwtPayload } from "../types/controller.type";
 import sessionService from "../services/session.service";
 
-
 export interface AuthRequest extends Request {
   user?: JwtPayload;
+  token?: string;
 }
 
+// Helper to centralize 401 responses
+const unauthorized = (res: Response, message: string) =>
+  res.status(401).json({ success: false, message });
+
+// -----------------------------
+// Singleton Redis check cache (per serverless instance)
+// -----------------------------
+let verifiedTokensCache = new Map<string, boolean>();
+
 export const authenticate = async (
-  req: Request,
+  req: AuthRequest,
   res: Response,
   next: NextFunction
-): Promise<void> => {
+) => {
   try {
     const authHeader = req.headers.authorization;
-
     if (!authHeader || !authHeader.startsWith("Bearer ")) {
-      res.status(401).json({
-        success: false,
-        message: "Access token is required",
-      });
-      return;
+      return unauthorized(res, "Access token is required");
     }
 
     const token = authHeader.split(" ")[1];
 
-    // Verify JWT token
-    const decoded = jwt.verify(token, process.env.JWT_SECRET!) as any;
+    // Check if token has been verified in this instance (singleton cache)
+    if (!verifiedTokensCache.has(token)) {
+      // Verify JWT token
+      const decoded = jwt.verify(token, process.env.JWT_SECRET!) as JwtPayload;
 
-    // Check if session exists in Redis
-    const sessionExists = await sessionService.sessionExists(decoded.id, token);
-    if (!sessionExists) {
-      res.status(401).json({
-        success: false,
-        message: "Session has expired or been revoked",
-      });
-      return;
+      // Check session in Redis and update last active
+      const sessionValid = await sessionService.verifyAndUpdateSession(decoded.id, token);
+      if (!sessionValid) return unauthorized(res, "Session expired or revoked");
+
+      // Cache token verification for this serverless instance
+      verifiedTokensCache.set(token, true);
+
+      // Attach user info to request
+      req.user = decoded;
+      req.token = token;
+    } else {
+      // Token was already verified in this instance
+      // Optionally decode without verifying (faster)
+      const decoded = jwt.decode(token) as JwtPayload;
+      req.user = decoded;
+      req.token = token;
     }
-
-    // Update last active time
-    await sessionService.updateSessionActivity(decoded.id, token);
-
-    // Attach user info to request
-    (req as any).admin = decoded;
-    (req as any).token = token;
 
     next();
   } catch (error: any) {
-    if (error.name === "TokenExpiredError") {
-      res.status(401).json({
-        success: false,
-        message: "Token has expired",
-      });
-      return;
-    }
-
-    res.status(401).json({
-      success: false,
-      message: "Invalid token",
-    });
+    const message =
+      error.name === "TokenExpiredError" ? "Token has expired" : "Invalid token";
+    return unauthorized(res, message);
   }
 };
