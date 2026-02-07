@@ -10,54 +10,59 @@ export class TransactionService {
    * TRANSACTIONS LIST + TOTALS
    * ===============================
    */
-  async getAllTransactions(page = 1, limit = 10) {
+ async getAllTransactions(page: number = 1, limit: number = 10) {
+  try {
+
     const skip = (page - 1) * limit;
 
     const [result] = await transactionHistoryModel.aggregate([
-      { $sort: { createdAt: -1 } },
+      // 🔹 Join event data
+      {
+        $lookup: {
+          from: "events",
+          localField: "event",
+          foreignField: "_id",
+          as: "event"
+        }
+      },
+      { $unwind: "$event" },
+
+      // 🔹 Resolve ticket and count buyers
+      {
+        $addFields: {
+          ticketInfo: {
+            $first: {
+              $filter: {
+                input: "$event.tickets",
+                as: "t",
+                cond: { $eq: ["$$t._id", "$ticket"] }
+              }
+            }
+          },
+          quantity: { $size: "$buyers" }
+        }
+      },
+
+      // 🔹 Calculate revenue per transaction
+      {
+        $addFields: {
+          revenue: {
+            $cond: [
+              { $eq: ["$status", "completed"] },
+              { $multiply: ["$quantity", "$ticketInfo.price"] },
+              0
+            ]
+          }
+        }
+      },
+
+      // 🔹 Facet for pagination and totals
       {
         $facet: {
           history: [
+            { $sort: { createdAt: -1 } },
             { $skip: skip },
             { $limit: limit },
-
-            {
-              $lookup: {
-                from: "events",
-                localField: "event",
-                foreignField: "_id",
-                as: "event"
-              }
-            },
-            { $unwind: "$event" },
-
-            {
-              $addFields: {
-                ticketInfo: {
-                  $first: {
-                    $filter: {
-                      input: "$event.tickets",
-                      as: "t",
-                      cond: { $eq: ["$$t._id", "$ticket"] }
-                    }
-                  }
-                },
-                quantity: { $size: "$buyers" }
-              }
-            },
-
-            {
-              $addFields: {
-                revenue: {
-                  $cond: [
-                    { $eq: ["$status", "completed"] },
-                    { $multiply: ["$quantity", "$ticketInfo.price"] },
-                    0
-                  ]
-                }
-              }
-            },
-
             {
               $project: {
                 txnId: 1,
@@ -117,7 +122,11 @@ export class TransactionService {
         hasPrev: page > 1
       }
     };
+  } catch (error: any) {
+    throw new Error(`Error fetching transactions: ${error.message}`);
   }
+}
+
 
   /**
    * ===============================
