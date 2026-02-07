@@ -213,34 +213,52 @@ export class TransactionService {
     /**
      * Helper method to calculate revenue for a date range
      */
-    private async calculateRevenue(startDate: Date, endDate: Date): Promise<number> {
-        const transactions = await transactionHistoryModel.find({
-            status: "completed",
-            createdAt: {
-                $gte: startDate,
-                $lte: endDate
+  private async calculateRevenue(startDate: Date, endDate: Date): Promise<number> {
+  const result = await transactionHistoryModel.aggregate([
+    {
+      $match: {
+        status: "completed",
+        createdAt: { $gte: startDate, $lte: endDate }
+      }
+    },
+    {
+      $lookup: {
+        from: "events",
+        localField: "event",
+        foreignField: "_id",
+        as: "event"
+      }
+    },
+    { $unwind: "$event" },
+    {
+      $addFields: {
+        ticketInfo: {
+          $first: {
+            $filter: {
+              input: "$event.tickets",
+              as: "t",
+              cond: { $eq: ["$$t._id", "$ticket"] }
             }
-        }).populate('ticket').lean();
-
-        let totalRevenue = 0;
-
-        for (const transaction of transactions) {
-            // Get the event to find ticket price
-            const event = await eventModel.findById(transaction.event).lean();
-            
-            if (event && event.tickets) {
-                const ticket = event.tickets.find(
-                    (t: any) => t._id.toString() === transaction.ticket.toString()
-                );
-                
-                if (ticket && ticket.price) {
-                    totalRevenue += ticket.price;
-                }
-            }
+          }
+        },
+        quantity: { $size: "$buyers" }
+      }
+    },
+    {
+      $group: {
+        _id: null,
+        totalRevenue: {
+          $sum: {
+            $multiply: ["$quantity", "$ticketInfo.price"]
+          }
         }
-
-        return totalRevenue;
+      }
     }
+  ]);
+
+  return result[0]?.totalRevenue || 0;
+}
+
 
     /**
      * Get combined dashboard stats
