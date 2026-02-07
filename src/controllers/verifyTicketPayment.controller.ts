@@ -73,10 +73,13 @@ export const verifyTicketPayment = async (req: Request, res: Response) => {
       transaction
     });
 
-    const result = await resend.emails.send({
-  from: "DeCave Tickets <no-reply@decavemgt.com>",
+  //   const result = await resend.emails.send({
+  // from: "DeCave Tickets <no-reply@decavemgt.com>",
+  // to: buyer.email,
+  // replyTo: "support@decavemgt.com",
+  const result = await transporter.sendMail({
+  from: '"DeCave Ticket " <info@decavemgt.com>',
   to: buyer.email,
-  replyTo: "support@decavemgt.com",
   subject: `Your Ticket for ${event.eventDetails.eventTitle}`,
   html: ticketEmailTemplate({
     buyer,
@@ -85,12 +88,12 @@ export const verifyTicketPayment = async (req: Request, res: Response) => {
     transaction
   }),
   attachments: [
-    {
-      filename: `Ticket-${buyer.ticketId}.pdf`,
-      content: pdfBuffer.toString("base64"),
-      contentType: "application/pdf"
-    }
-  ]
+  {
+    filename: `Ticket-${buyer.ticketId}.pdf`,
+    content: pdfBuffer,
+    contentType: "application/pdf"
+  }
+]
 });
 
 console.log("Resend result:", result);
