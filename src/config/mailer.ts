@@ -12,7 +12,7 @@
 import nodemailer from "nodemailer";
 
 export const transporter = nodemailer.createTransport({
-  host: "smtp.zoho.com",
+  host: "smtppro.zoho.com",
   port: 465,
   secure: true, // SSL
   auth: {

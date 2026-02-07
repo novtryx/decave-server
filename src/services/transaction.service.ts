@@ -101,7 +101,7 @@ export class TransactionService {
       }
     ]);
 
-    const totals = result.totals[0] || {
+    const totals = result.totals[0] || { 
       totalRevenue: 0,
       totalPending: 0,
       totalFailed: 0,
