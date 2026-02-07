@@ -72,7 +72,7 @@ export const generateTicketPDF = async ({
         .text(`${ticket.ticketName} Ticket`, 200, 105);
 
       // === QR Code ===
-      doc.image(buyer.qrCode, 206, 150, { width: 200, height: 200 });
+      doc.image(buyer.qrCode, 206, 150, { width: 100, height: 200 });
 
       // === Ticket ID & Transaction ===
       doc.fillColor("#F9F7F4")
