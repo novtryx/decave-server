@@ -53,7 +53,7 @@ export const generateTicketPDF = async ({
 
       // === Header ===
       doc.rect(50, 50, 512, 80).fill("#BA8703");
-      doc.image(logoBuffer, 56, 55, { width: 120, height: 40 });
+      doc.image(logoBuffer, 56, 55, { width: 60, height: 40 });
 
       // === Event Title & Theme ===
       doc.fillColor("#F9F7F4")
@@ -72,7 +72,7 @@ export const generateTicketPDF = async ({
         .text(`${ticket.ticketName} Ticket`, 200, 105);
 
       // === QR Code ===
-      doc.image(buyer.qrCode, 206, 150, { width: 100, height: 200 });
+      doc.image(buyer.qrCode, 206, 150, { width: 200, height: 200 });
 
       // === Ticket ID & Transaction ===
       doc.fillColor("#F9F7F4")
