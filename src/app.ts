@@ -81,6 +81,7 @@ import paymentRoutes from "./routes/payment.route";
 import transactionRoute from "./routes/transaction.route";
 import dashboardRoute from "./routes/dashboard.route";
 import analyticsRoute from "./routes/analytics.route";
+import newsletterRoute from "./routes/newsletter.route"
 
 // Middleware
 import { authRateLimiter } from "./middleware/rateLimit.middleware";
@@ -114,6 +115,7 @@ app.use(express.urlencoded({ extended: true }));
 // Ensure DB & Redis Connection
 // -----------------------------
 app.use("/api", ensureDbConnection);
+app.use(express.static("public"));
 
 // -----------------------------
 // Routes
@@ -126,6 +128,8 @@ app.use("/api/payment", paymentRoutes);
 app.use("/api/transaction", transactionRoute);
 app.use("/api/dashboard", dashboardRoute);
 app.use("/api/analytics", analyticsRoute);
+app.use("/api/newsletter", newsletterRoute);
+
 
 // -----------------------------
 // Health / Ping endpoints
