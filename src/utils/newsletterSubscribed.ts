@@ -10,7 +10,7 @@ export const newsletterSubscribedEmail = (logoUrl: string) => {
         <h2 style="color:#111827;">You’re subscribed 🎉</h2>
 
         <p style="color:#374151; font-size:15px;">
-          Thank you for subscribing to our newsletter.
+          Thank you for subscribing to deCave's newsletter.
         </p>
 
         <p style="color:#374151; font-size:15px;">
@@ -24,7 +24,7 @@ export const newsletterSubscribedEmail = (logoUrl: string) => {
         <hr style="margin:30px 0;" />
 
         <p style="color:#9ca3af; font-size:12px; text-align:center;">
-          © ${new Date().getFullYear()} All rights reserved.
+         deCave © ${new Date().getFullYear()} All rights reserved.
         </p>
       </div>
     </div>
