@@ -1,3 +1,4 @@
+import fetch from 'node-fetch';
 import PDFDocument from 'pdfkit';
 
 
@@ -18,6 +19,18 @@ const formatDate = (date: string) => {
     });
   };
  const logo = `${process.env.APP_URL}/decave-logo.png`;
+ 
+ const logo2 = async (): Promise<Buffer> => {
+  const response = await fetch(
+    "https://decave-demo-server.vercel.app/decave-logo.png"
+  );
+
+  if (!response.ok) {
+    throw new Error("Failed to fetch logo");
+  }
+
+  return Buffer.from(await response.arrayBuffer());
+};
 
 export const generateTicketPDF = async ({
   buyer,
@@ -27,75 +40,90 @@ export const generateTicketPDF = async ({
 }: any): Promise<Buffer> => {
   return new Promise(async (resolve, reject) => {
     try {
-      const doc = new PDFDocument({ size: 'A4', margin: 50 });
+      const doc = new PDFDocument({ size: "A4", margin: 50 });
       const chunks: Buffer[] = [];
 
-      doc.on('data', (chunk) => chunks.push(chunk));
-      doc.on('end', () => resolve(Buffer.concat(chunks)));
+      doc.on("data", (chunk) => chunks.push(chunk));
+      doc.on("end", () => resolve(Buffer.concat(chunks)));
 
-      // === Background === 
-      doc.rect(0, 0, 612, 792).fill('#0A0A0A');
+      // === Load logo FIRST ===
+      const logoBuffer = await logo2();
 
-      // === Header (Gold bar + Logo) ===
-      doc.rect(50, 50, 512, 80).fill('#BA8703');
-      doc.image(logo, 56, 55, { width: 120, height: 40 });
+      // === Background ===
+      doc.rect(0, 0, 612, 792).fill("#0A0A0A");
+
+      // === Header ===
+      doc.rect(50, 50, 512, 80).fill("#BA8703");
+      doc.image(logoBuffer, 56, 55, { width: 120, height: 40 });
 
       // === Event Title & Theme ===
-      doc.fillColor('#F9F7F4')
+      doc.fillColor("#F9F7F4")
         .fontSize(16)
-        .font('Helvetica-Bold')
+        .font("Helvetica-Bold")
         .text(event.eventTitle, 200, 55, { width: 360 });
+
       doc.fontSize(20)
-        .fillColor('#CCA33A')
+        .fillColor("#CCA33A")
         .text(event.eventTheme, 200, 75, { width: 360 });
 
       // === Ticket Type ===
       doc.fontSize(12)
-        .fillColor('#F9F7F4')
-        .font('Helvetica')
+        .fillColor("#F9F7F4")
+        .font("Helvetica")
         .text(`${ticket.ticketName} Ticket`, 200, 105);
 
       // === QR Code ===
       doc.image(buyer.qrCode, 206, 150, { width: 200, height: 200 });
 
       // === Ticket ID & Transaction ===
-      doc.fillColor('#F9F7F4')
+      doc.fillColor("#F9F7F4")
         .fontSize(16)
-        .text(`Ticket ID: ${buyer.ticketId}`, 0, 370, { align: 'center', width: 612 });
-      doc.fillColor('#b3b3b3')
+        .text(`Ticket ID: ${buyer.ticketId}`, 0, 370, {
+          align: "center",
+          width: 612,
+        });
+
+      doc.fillColor("#b3b3b3")
         .fontSize(10)
-        .text(`Transaction: ${transaction.txnId}`, 0, 390, { align: 'center', width: 612 });
+        .text(`Transaction: ${transaction.txnId}`, 0, 390, {
+          align: "center",
+          width: 612,
+        });
 
       // === Buyer & Event Details ===
       let yPos = 420;
       const details = [
-        { label: 'Ticket Holder', value: buyer.fullName },
-        { label: 'Email', value: buyer.email },
+        { label: "Ticket Holder", value: buyer.fullName },
+        { label: "Email", value: buyer.email },
         {
-          label: 'Event Date & Time',
-          value: `${formatDate(event.startDate)}\n${formatTime(event.startDate)} - ${formatTime(event.endDate)}`,
+          label: "Event Date & Time",
+          value: `${formatDate(event.startDate)}\n${formatTime(
+            event.startDate
+          )} - ${formatTime(event.endDate)}`,
         },
-        { label: 'Venue', value: `${event.venue}\n${event.address}` },
-        { label: 'Phone Number', value: buyer.phoneNumber },
+        { label: "Venue", value: `${event.venue}\n${event.address}` },
+        { label: "Phone Number", value: buyer.phoneNumber },
       ];
 
       details.forEach((detail) => {
-        // Label
-        doc.fillColor('#b3b3b3')
-          .fontSize(10)
-          .text(detail.label, 70, yPos);
-        // Value
-        doc.fillColor('#F9F7F4')
+        doc.fillColor("#b3b3b3").fontSize(10).text(detail.label, 70, yPos);
+        doc
+          .fillColor("#F9F7F4")
           .fontSize(12)
-          .font('Helvetica-Bold')
+          .font("Helvetica-Bold")
           .text(detail.value, 70, yPos + 15);
         yPos += 50;
       });
 
       // === Footer ===
-      doc.fillColor('#999999')
+      doc.fillColor("#999999")
         .fontSize(9)
-        .text('Present this ticket at the entrance. Each QR code can only be used once.', 50, yPos + 20, { width: 512, align: 'center' });
+        .text(
+          "Present this ticket at the entrance. Each QR code can only be used once.",
+          50,
+          yPos + 20,
+          { width: 512, align: "center" }
+        );
 
       doc.end();
     } catch (error) {
