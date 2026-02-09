@@ -79,6 +79,16 @@ const socialsSchema = Joi.object({
   website: Joi.string().uri().allow("").optional(),
 });
 
+const faqSchema = Joi.object({
+  question: Joi.string().trim().required(),
+  answer: Joi.string().trim().required()
+})
+
+const codeSchema = Joi.object({
+  title: Joi.string().trim().required(),
+  body: Joi.string().trim().required()
+})
+
 // Artist Line Up Schema
 const artistLineUpSchema = Joi.object({
   artistImage: Joi.string().uri().required(),
@@ -138,6 +148,8 @@ export const updateStage4Schema = Joi.object({
 export const updateStage5Schema = Joi.object({
   stage: Joi.number().valid(5).required(),
   emergencyContact: emergencyContactSchema.required(),
+  faq: Joi.array().items(faqSchema).required(),
+  code: Joi.array().items(codeSchema).required(),
   published: Joi.boolean().default(true),
 });
 

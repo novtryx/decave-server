@@ -86,6 +86,21 @@ const EmergencyContactSchema = new Schema(
   { _id: false }
 );
 
+const faqSchema = new Schema(
+  {
+    question:{type: String, required: true, trim: true},
+    answer:{type: String, required: true, trim: true}
+  },
+  {_id: true}
+);
+
+const codeSchema = new Schema(
+  {
+    title:{type: String, required: true, trim: true},
+    body:{type: String, required: true, trim: true}
+  },
+  {_id: true}
+);
 // Main Event Schema
 const EventSchema = new Schema<IEvent>(
   {
@@ -117,6 +132,14 @@ const EventSchema = new Schema<IEvent>(
       type: EmergencyContactSchema, 
       required: false 
     },
+    faq:{
+      type: [faqSchema],
+      default: []
+    },
+    code:{
+      type:[codeSchema],
+      default: []
+    }
   },
   { 
     timestamps: true,

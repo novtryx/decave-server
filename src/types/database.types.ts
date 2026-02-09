@@ -86,6 +86,14 @@ export interface IEvent extends Document {
     }[];
   }[];
   //stage 5
+  faq:{
+    question: string;
+    answer: string;
+  }[];
+  code:{
+    title: string;
+    body: string;
+  }[];
   emergencyContact:{
     security: string;
     medical: string;
