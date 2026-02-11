@@ -113,10 +113,11 @@ export const getAllEvents = async (req: Request, res: Response): Promise<void> =
 };
 
 // Update event (general)
-export const updateEvent = async (req: AuthRequest, res: Response): Promise<void> => {
+export const updateEvent = async (req: Request, res: Response): Promise<void> => {
   try {
     const { id } = req.params;
     const updateData = req.body;
+    console.log("keys", Object.keys(updateData))
 
     const updatedEvent = await eventService.updateEvent(id as string, updateData);
 

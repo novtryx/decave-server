@@ -96,7 +96,7 @@ const artistLineUpSchema = Joi.object({
   artistGenre: Joi.string().trim().required(),
   headliner: Joi.boolean().default(false),
   socials: socialsSchema.required(),
-});
+}); 
 
 // Emergency Contact Schema
 const emergencyContactSchema = Joi.object({
@@ -122,6 +122,8 @@ export const updateEventSchema = Joi.object({
   tickets: Joi.array().items(ticketSchema).optional(),
   artistLineUp: Joi.array().items(artistLineUpSchema).optional(),
   emergencyContact: emergencyContactSchema.optional(),
+   faq: Joi.array().items(faqSchema).optional(),        
+  code: Joi.array().items(codeSchema).optional(),      
 });
 
 // Update Stage 2 Schema
