@@ -122,7 +122,7 @@ async updateEventTicket(
   ticketId: string,
   updateData: Partial<{
     ticketName: string;
-    price: number;
+    price: number; // allowed in payload, but ignored
     currency: string;
     availableQuantity: number;
     benefits: string[];
@@ -137,7 +137,6 @@ async updateEventTicket(
     const ticket = event.tickets.find(
       (t: any) => t._id.toString() === ticketId
     );
-
     if (!ticket) throw new Error("Ticket not found");
 
     // =========================
@@ -146,11 +145,8 @@ async updateEventTicket(
     if (updateData.ticketName !== undefined)
       ticket.ticketName = updateData.ticketName;
 
-    if (updateData.price !== undefined) {
-      if (updateData.price < 0)
-        throw new Error("Price cannot be negative");
-      ticket.price = updateData.price;
-    }
+    // ✅ Ignore price updates completely
+    // if (updateData.price !== undefined) { ... } <- removed
 
     if (updateData.currency !== undefined)
       ticket.currency = updateData.currency;
@@ -170,25 +166,18 @@ async updateEventTicket(
         throw new Error("Available quantity cannot be negative");
       }
 
-      // ✅ CASE 1: Set to zero
+      // CASE 1: Set available to 0
       if (newAvailable === 0) {
-        ticket.initialQuantity =
-          currentInitial - currentAvailable;
-
+        ticket.initialQuantity = currentInitial - currentAvailable;
         ticket.availableQuantity = 0;
       }
-
-      // ✅ CASE 2: Restock (increase available)
+      // CASE 2: Increase available (restock)
       else if (newAvailable > currentAvailable) {
         const difference = newAvailable - currentAvailable;
-
-        ticket.initialQuantity =
-          currentInitial + difference;
-
+        ticket.initialQuantity = currentInitial + difference;
         ticket.availableQuantity = newAvailable;
       }
-
-      // ✅ CASE 3: Reduce available (normal decrease)
+      // CASE 3: Decrease available normally
       else {
         ticket.availableQuantity = newAvailable;
       }
@@ -203,6 +192,7 @@ async updateEventTicket(
     );
   }
 }
+
 
 
 
