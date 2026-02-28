@@ -4,6 +4,8 @@ import uploadService from "../services/upload.service";
 import { AuthRequest } from "../middleware/auth.middleware";
 import activityService  from "../services/notification.service";
 
+
+
 // Create event (Stage 1)
 export const createEvent = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
@@ -56,6 +58,109 @@ export const getEventById = async (req: AuthRequest, res: Response): Promise<voi
     });
   }
 };
+
+export const updateEventTicket = async (
+  req: Request,
+  res: Response
+): Promise<Response> => {
+  try {
+    const { eventId , ticketId } = req.params;
+    const updateData = req.body;
+    const eventIdStr = Array.isArray(eventId) ? eventId[0] : eventId;
+    const ticketIdStr = Array.isArray(ticketId) ? ticketId[0] : ticketId;
+
+
+    if (!eventId || !ticketId) {
+      return res.status(400).json({
+        success: false,
+        message: "Event ID and Ticket ID are required",
+      });
+    }
+
+    const updatedEvent = await eventService.updateEventTicket(
+      eventIdStr,
+      ticketIdStr,
+      updateData
+    );
+
+    if (!updatedEvent) {
+      return res.status(404).json({
+        success: false,
+        message: "Event or ticket not found",
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: "Ticket updated successfully",
+      data: updatedEvent,
+    });
+  } catch (error: any) {
+    return res.status(500).json({
+      success: false,
+      message: error.message || "Internal server error",
+    });
+  }
+};
+
+
+export const createEventTicket = async (
+  req: Request,
+  res: Response
+): Promise<Response> => {
+  try {
+    const { eventId } = req.params;
+    const data = req.body;
+
+    const eventIdStr = Array.isArray(eventId)
+      ? eventId[0]
+      : eventId;
+
+    if (!eventIdStr) {
+      return res.status(400).json({
+        success: false,
+        message: "Event ID is required",
+      });
+    }
+
+    // Required fields validation
+    if (
+      !data.ticketName ||
+      data.price === undefined ||
+      data.initialQuantity === undefined
+    ) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "ticketName, price and initialQuantity are required",
+      });
+    }
+
+    const createdEvent = await eventService.createEventTicket(
+      eventIdStr,
+      data
+    );
+
+    if (!createdEvent) {
+      return res.status(404).json({
+        success: false,
+        message: "Event not found",
+      });
+    }
+
+    return res.status(201).json({
+      success: true,
+      message: "Ticket created successfully",
+      data: createdEvent,
+    });
+  } catch (error: any) {
+    return res.status(500).json({
+      success: false,
+      message: error.message || "Internal server error",
+    });
+  }
+};
+
 
 export const getEventByTitle = async (req: Request, res: Response): Promise<void> => {
   try {

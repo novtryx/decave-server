@@ -14,6 +14,8 @@ import {
   getPastEvents,
   getEventStats,
   getEventByTitle,
+  updateEventTicket,
+  createEventTicket,
 } from "../controllers/event.controller";
 import {
   validateCreateEvent,
@@ -51,11 +53,25 @@ router.put(
   updateEvent
 );
 
+router.post(
+  "/create-ticket/:eventId",
+  authenticate,
+  createEventTicket
+);
+
+
 router.patch(
   "/:id/stage",
   authenticate,
   updateEventStage
 );
+
+router.patch(
+  "/:eventId/tickets/:ticketId",
+  authenticate,
+  updateEventTicket
+);
+
 
 router.delete("/:id", authenticate, deleteEvent);
 

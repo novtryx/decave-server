@@ -115,6 +115,135 @@ export class EventService {
       throw new Error(`Error updating event: ${error.message}`);
     }
   }
+
+
+async updateEventTicket(
+  eventId: string,
+  ticketId: string,
+  updateData: Partial<{
+    ticketName: string;
+    price: number;
+    currency: string;
+    availableQuantity: number;
+    benefits: string[];
+  }>
+): Promise<IEvent | null> {
+  try {
+    await this.ensureConnection();
+
+    const event = await eventModel.findById(eventId);
+    if (!event) throw new Error("Event not found");
+
+    const ticket = event.tickets.find(
+      (t: any) => t._id.toString() === ticketId
+    );
+
+    if (!ticket) throw new Error("Ticket not found");
+
+    // =========================
+    // Update Basic Fields
+    // =========================
+    if (updateData.ticketName !== undefined)
+      ticket.ticketName = updateData.ticketName;
+
+    if (updateData.price !== undefined) {
+      if (updateData.price < 0)
+        throw new Error("Price cannot be negative");
+      ticket.price = updateData.price;
+    }
+
+    if (updateData.currency !== undefined)
+      ticket.currency = updateData.currency;
+
+    if (updateData.benefits !== undefined)
+      ticket.benefits = updateData.benefits;
+
+    // =========================
+    // 🔥 Advanced Quantity Logic
+    // =========================
+    if (updateData.availableQuantity !== undefined) {
+      const newAvailable = updateData.availableQuantity;
+      const currentAvailable = ticket.availableQuantity;
+      const currentInitial = ticket.initialQuantity;
+
+      if (newAvailable < 0) {
+        throw new Error("Available quantity cannot be negative");
+      }
+
+      // ✅ CASE 1: Set to zero
+      if (newAvailable === 0) {
+        ticket.initialQuantity =
+          currentInitial - currentAvailable;
+
+        ticket.availableQuantity = 0;
+      }
+
+      // ✅ CASE 2: Restock (increase available)
+      else if (newAvailable > currentAvailable) {
+        const difference = newAvailable - currentAvailable;
+
+        ticket.initialQuantity =
+          currentInitial + difference;
+
+        ticket.availableQuantity = newAvailable;
+      }
+
+      // ✅ CASE 3: Reduce available (normal decrease)
+      else {
+        ticket.availableQuantity = newAvailable;
+      }
+    }
+
+    await event.save();
+    return event;
+
+  } catch (error: any) {
+    throw new Error(
+      `Error updating event ticket: ${error.message}`
+    );
+  }
+}
+
+
+
+async createEventTicket(
+  eventId: string,
+  data: {
+    ticketName: string;
+    price: number;
+    currency?: string;
+    initialQuantity: number;
+    benefits?: string[];
+  }
+): Promise<IEvent | null> {
+  try {
+    await this.ensureConnection();
+
+    const event = await eventModel.findById(eventId);
+    if (!event) throw new Error("Event not found");
+
+    event.tickets.push({
+      ticketName: data.ticketName,
+      price: data.price,
+      currency: data.currency ?? "NGN",
+      initialQuantity: data.initialQuantity,
+      availableQuantity: data.initialQuantity,
+      benefits: data.benefits ?? [],
+    } as any);
+
+    await event.save();
+    return event;
+
+  } catch (error: any) {
+    throw new Error(
+      `Error creating event ticket: ${error.message}`
+    );
+  }
+}
+
+
+
+
   // Update specific stage
   async updateEventStage(
     id: string,
