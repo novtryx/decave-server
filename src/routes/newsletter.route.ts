@@ -10,4 +10,4 @@ router.delete("/", unsubscribeFromNewsletter);
 
 
 
-export default router; 
+export default router;

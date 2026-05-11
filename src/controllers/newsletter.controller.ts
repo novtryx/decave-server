@@ -109,78 +109,92 @@ export const unsubscribeFromNewsletter = async (
 
 
 
-export const getAllSubscribedEmail = async (req:Request, res:Response) => {
-
+export const getAllSubscribedEmail = async (req: Request, res: Response) => {
   try {
-    
-    const subscribedEmail = await newsletterModel.find().lean()
+    const page = Math.max(1, parseInt(req.query.page as string) || 1);
+    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit as string) || 10));
+    const skip = (page - 1) * limit;
+
+    const [subscribedEmail, total] = await Promise.all([
+      newsletterModel.find().skip(skip).limit(limit).lean(),
+      newsletterModel.countDocuments(),
+    ]);
+
+    const totalPages = Math.ceil(total / limit);
 
     return res.status(200).json({
       success: true,
-      data: subscribedEmail
-    })
+      data: subscribedEmail,
+      pagination: {
+        total,
+        totalPages,
+        currentPage: page,
+        limit,
+        hasNextPage: page < totalPages,
+        hasPrevPage: page > 1,
+      },
+    }); 
   } catch (error: any) {
     return res.status(500).json({
-      message: "Failed to subscribe",
+      message: "Failed to fetch subscribed emails",
       error: error.message,
-      success: false
+      success: false,
     });
   }
-}
+};
 
-export const sendNewsletter = async (
-  req: Request,
-  res: Response
-) => {
+export const sendNewsletter = async (req: Request, res: Response) => {
   try {
-    const { subject, body, emails } = req.body;
+    const { subject, body, emails, sendToAll } = req.body;
 
-    // 🔹 Basic validation
-    if (!subject || !body || !emails) {
-      return res.status(400).json({
-        message: "Subject, body and emails are required"
-      });
+    if (!subject || !body) {
+      return res.status(400).json({ message: "Subject and body are required" });
     }
 
-    if (!Array.isArray(emails) || emails.length === 0) {
-      return res.status(400).json({
-        message: "Emails must be a non-empty array"
-      });
+    let targetEmails: string[] = [];
+
+    if (sendToAll) {
+      // Fetch all emails directly from DB — no pagination limit
+      const allSubscribers = await newsletterModel.find().select("email").lean();
+      targetEmails = allSubscribers.map((s) => s.email);
+
+      if (targetEmails.length === 0) {
+        return res.status(400).json({ message: "No subscribers found" });
+      }
+    } else {
+      // Specific emails provided by frontend
+      if (!Array.isArray(emails) || emails.length === 0) {
+        return res.status(400).json({ message: "Emails must be a non-empty array" });
+      }
+
+      const emailRegex = /^\S+@\S+\.\S+$/;
+      const invalidEmails = emails.filter((email: string) => !emailRegex.test(email));
+      if (invalidEmails.length > 0) {
+        return res.status(400).json({ message: "Some emails are invalid", invalidEmails });
+      }
+
+      targetEmails = emails;
     }
 
-    const emailRegex = /^\S+@\S+\.\S+$/;
-
-    // 🔹 Validate each email
-    const invalidEmails = emails.filter(
-      (email: string) => !emailRegex.test(email)
-    );
-
-    if (invalidEmails.length > 0) {
-      return res.status(400).json({
-        message: "Some emails are invalid",
-        invalidEmails
-      });
-    }
-
-    // 🔹 Send newsletter
     await transporter.sendMail({
       from: '"DeCave Management" <info@decavemgt.com>',
-      bcc: emails,
+      bcc: targetEmails,
       subject,
       html: newsletterTemplate(
         `https://decave-demo-server.vercel.app/decave-logo.png`,
         body
-      )
+      ),
     });
 
     return res.status(200).json({
-      message: "Newsletter sent successfully"
+      message: "Newsletter sent successfully",
+      sentCount: targetEmails.length,
+      success: true,
     });
-
   } catch (error: any) {
     return res.status(500).json({
       message: "Failed to send newsletter",
-      error: error.message
+      error: error.message,
     });
   }
 };
