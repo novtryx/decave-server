@@ -8,7 +8,6 @@ import { Resend } from "resend";
 import transactionService from "../services/transaction.service";
 
 
-const resend = new Resend(process.env.RESEND_API_KEY);
 
 
 export const verifyTicketPayment = async (req: Request, res: Response) => {

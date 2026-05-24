@@ -1,4 +1,5 @@
 import mongoose, { Document, Mongoose } from "mongoose";
+import { Influencer } from './../models/influencer.model';
 
 export interface IAdmin extends Document {
   fullName: string;
@@ -158,4 +159,5 @@ export interface ITransactionHistory extends Document{
   status: "pending"| "failed"| "completed";
    createdAt?: Date;
   updatedAt?: Date;
+  influencer: any
 }

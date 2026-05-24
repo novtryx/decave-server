@@ -47,6 +47,11 @@ const TransactionHistorySchema = new Schema<ITransactionHistory>(
       trim: true,
       // index: true, 
     },
+    influencer: {
+    type: Schema.Types.ObjectId,
+    ref: "Influencer",
+    default: null,
+  },
     event: {
       type: Schema.Types.ObjectId,
       ref: "Event",
@@ -77,6 +82,7 @@ const TransactionHistorySchema = new Schema<ITransactionHistory>(
       default: "pending",
       index: true,
     },
+    
   },
   {
     timestamps: true,
