@@ -4,6 +4,7 @@ import { client, transporter } from "../config/mailer";
 import { newsletterSubscribedEmail } from "../utils/newsletterSubscribed";
 import newsletterModel from "../models/newsletter.model";
 import { newsletterTemplate } from "../utils/newsletterBulkMail";
+import axios from "axios";
 
 export const subscribeToNewsletter = async (
   req: Request,
@@ -148,6 +149,41 @@ const BATCH_DELAY_MS = 1000;
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+const zeptoClient = axios.create({
+  baseURL: "https://api.zeptomail.com/v1.1",
+  headers: {
+    Authorization: process.env.ZEPTO_API_KEY!,
+    "Content-Type": "application/json",
+    Accept: "application/json",
+  },
+  timeout: 10000,
+});
+
+const sendSingleMail = async (
+  email: string,
+  subject: string,
+  body: string
+) => {
+  return zeptoClient.post("/email", {
+    from: {
+      address: "info@decavemgt.com",
+      name: "DeCave Management",
+    },
+    to: [
+      {
+        email_address: {
+          address: email,
+          name: email.split("@")[0],
+        },
+      },
+    ],
+    subject,
+    htmlbody: newsletterTemplate(
+      `https://decave-demo-server.vercel.app/decave-logo.png`,
+      body
+    ),
+  });
+};
 
 const sendInBatches = async (
   emails: string[],
@@ -167,39 +203,22 @@ const sendInBatches = async (
     const batch = batches[i];
 
     const results = await Promise.allSettled(
-      batch.map((email) =>
-        client.sendMail({
-          from: {
-            address: "info@decavemgt.com",
-            name: "DeCave Management",
-          },
-          to: [
-            {
-              email_address: {
-                address: email,
-                name: email.split("@")[0],
-              },
-            },
-          ],
-          subject,
-          htmlbody: newsletterTemplate(
-            `https://decave-demo-server.vercel.app/decave-logo.png`,
-            body
-          ),
-        })
-      )
+      batch.map((email) => sendSingleMail(email, subject, body))
     );
 
     results.forEach((result, index) => {
       if (result.status === "fulfilled") {
         totalSent++;
       } else {
-        console.error(`❌ Failed for ${batch[index]}:`, result.reason?.message);
+        const reason = result.reason?.response?.data || result.reason?.message;
+        console.error(`❌ Failed for ${batch[index]}:`, reason);
         failedEmails.push(batch[index]);
       }
     });
 
-    console.log(`✅ Batch ${i + 1}/${batches.length} processed (${batch.length} emails)`);
+    console.log(
+      `✅ Batch ${i + 1}/${batches.length} processed (${batch.length} emails)`
+    );
 
     if (i < batches.length - 1) {
       await sleep(BATCH_DELAY_MS);
@@ -220,7 +239,10 @@ export const sendNewsletter = async (req: Request, res: Response) => {
     let targetEmails: string[] = [];
 
     if (sendToAll) {
-      const allSubscribers = await newsletterModel.find().select("email").lean();
+      const allSubscribers = await newsletterModel
+        .find()
+        .select("email")
+        .lean();
       targetEmails = allSubscribers.map((s) => s.email);
 
       if (targetEmails.length === 0) {
@@ -228,13 +250,19 @@ export const sendNewsletter = async (req: Request, res: Response) => {
       }
     } else {
       if (!Array.isArray(emails) || emails.length === 0) {
-        return res.status(400).json({ message: "Emails must be a non-empty array" });
+        return res
+          .status(400)
+          .json({ message: "Emails must be a non-empty array" });
       }
 
       const emailRegex = /^\S+@\S+\.\S+$/;
-      const invalidEmails = emails.filter((email: string) => !emailRegex.test(email));
+      const invalidEmails = emails.filter(
+        (email: string) => !emailRegex.test(email)
+      );
       if (invalidEmails.length > 0) {
-        return res.status(400).json({ message: "Some emails are invalid", invalidEmails });
+        return res
+          .status(400)
+          .json({ message: "Some emails are invalid", invalidEmails });
       }
 
       targetEmails = emails;
@@ -250,12 +278,13 @@ export const sendNewsletter = async (req: Request, res: Response) => {
       });
 
       sendInBatches(targetEmails, subject, body).then(({ sent, failed }) => {
-        console.log(`📧 Newsletter complete — sent: ${sent}, failed: ${failed.length}`);
+        console.log(
+          `📧 Newsletter complete — sent: ${sent}, failed: ${failed.length}`
+        );
         if (failed.length > 0) {
           console.warn("⚠️ Failed emails:", failed);
         }
       });
-
     } else {
       // Small list — wait and return full result
       const { sent, failed } = await sendInBatches(targetEmails, subject, body);
