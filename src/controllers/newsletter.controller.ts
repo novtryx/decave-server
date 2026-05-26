@@ -268,39 +268,47 @@ export const sendNewsletter = async (req: Request, res: Response) => {
       targetEmails = emails;
     }
 
-    // Large list — respond immediately and process in background
-    if (targetEmails.length > BATCH_SIZE) {
-      res.status(202).json({
-        message: "Newsletter send started",
-        totalRecipients: targetEmails.length,
-        estimatedBatches: Math.ceil(targetEmails.length / BATCH_SIZE),
-        success: true,
-      });
+    // ✅ Single API call with all emails in BCC
+    await zeptoClient.post("/email", {
+      from: {
+        address: "info@decavemgt.com",
+        name: "DeCave Management",
+      },
+      to: [
+        {
+          // Required by ZeptoMail even when using BCC
+          email_address: {
+            address: "info@decavemgt.com",
+            name: "DeCave Management",
+          },
+        },
+      ],
+      bcc: targetEmails.map((email) => ({
+        email_address: {
+          address: email,
+          name: email.split("@")[0],
+        },
+      })),
+      subject,
+      htmlbody: newsletterTemplate(
+        `https://decave-demo-server.vercel.app/decave-logo.png`,
+        body
+      ),
+    });
 
-      sendInBatches(targetEmails, subject, body).then(({ sent, failed }) => {
-        console.log(
-          `📧 Newsletter complete — sent: ${sent}, failed: ${failed.length}`
-        );
-        if (failed.length > 0) {
-          console.warn("⚠️ Failed emails:", failed);
-        }
-      });
-    } else {
-      // Small list — wait and return full result
-      const { sent, failed } = await sendInBatches(targetEmails, subject, body);
+    return res.status(200).json({
+      message: "Newsletter sent successfully",
+      sentCount: targetEmails.length,
+      success: true,
+    });
 
-      return res.status(200).json({
-        message: "Newsletter sent successfully",
-        sentCount: sent,
-        failedCount: failed.length,
-        ...(failed.length > 0 && { failedEmails: failed }),
-        success: true,
-      });
-    }
   } catch (error: any) {
+    console.log("Error:", JSON.stringify(error.response?.data, null, 2));
+
     return res.status(500).json({
       message: "Failed to send newsletter",
-      error: error.message,
+      error: error.response?.data?.message || error.message,
+      details: error.response?.data,
     });
   }
 };
