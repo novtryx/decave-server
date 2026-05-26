@@ -143,6 +143,7 @@ export const getAllSubscribedEmail = async (req: Request, res: Response) => {
     });
   }
 };
+export const maxDuration = 300; // 5 minutes — Vercel Pro only
 
 const BATCH_SIZE = 50;
 const BATCH_DELAY_MS = 1000;
@@ -268,37 +269,63 @@ export const sendNewsletter = async (req: Request, res: Response) => {
       targetEmails = emails;
     }
 
-    // ✅ Single API call with all emails in BCC
-    await zeptoClient.post("/email", {
-      from: {
-        address: "info@decavemgt.com",
-        name: "DeCave Management",
-      },
-      to: [
-        {
-          // Required by ZeptoMail even when using BCC
-          email_address: {
+    // Split into batches of 50
+    const batches: string[][] = [];
+    for (let i = 0; i < targetEmails.length; i += 50) {
+      batches.push(targetEmails.slice(i, i + 50));
+    }
+
+    let totalSent = 0;
+    const failedBatches: number[] = [];
+
+    // Send all batches concurrently — no waiting between them
+    const results = await Promise.allSettled(
+      batches.map((batch, index) =>
+        zeptoClient.post("/email", {
+          from: {
             address: "info@decavemgt.com",
             name: "DeCave Management",
           },
-        },
-      ],
-      bcc: targetEmails.map((email) => ({
-        email_address: {
-          address: email,
-          name: email.split("@")[0],
-        },
-      })),
-      subject,
-      htmlbody: newsletterTemplate(
-        `https://decave-demo-server.vercel.app/decave-logo.png`,
-        body
-      ),
+          to: [
+            {
+              email_address: {
+                address: "info@decavemgt.com",
+                name: "DeCave Management",
+              },
+            },
+          ],
+          bcc: batch.map((email) => ({
+            email_address: {
+              address: email,
+              name: email.split("@")[0],
+            },
+          })),
+          subject,
+          htmlbody: newsletterTemplate(
+            `https://decave-demo-server.vercel.app/decave-logo.png`,
+            body
+          ),
+        })
+      )
+    );
+
+    results.forEach((result, index) => {
+      if (result.status === "fulfilled") {
+        totalSent += batches[index].length;
+        console.log(`✅ Batch ${index + 1}/${batches.length} sent`);
+      } else {
+        console.error(
+          `❌ Batch ${index + 1} failed:`,
+          result.reason?.response?.data || result.reason?.message
+        );
+        failedBatches.push(index + 1);
+      }
     });
 
     return res.status(200).json({
       message: "Newsletter sent successfully",
-      sentCount: targetEmails.length,
+      sentCount: totalSent,
+      failedBatches: failedBatches.length > 0 ? failedBatches : undefined,
       success: true,
     });
 
