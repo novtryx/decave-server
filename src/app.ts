@@ -83,6 +83,7 @@ import dashboardRoute from "./routes/dashboard.route";
 import analyticsRoute from "./routes/analytics.route";
 import newsletterRoute from "./routes/newsletter.route"
 import galleryRoute from "./routes/gallery.route"
+import resendRoute from "./routes/resend.route"
 
 // Middleware
 import { authRateLimiter } from "./middleware/rateLimit.middleware";
@@ -130,7 +131,10 @@ app.use("/api/transaction", transactionRoute);
 app.use("/api/dashboard", dashboardRoute);
 app.use("/api/analytics", analyticsRoute);
 app.use("/api/newsletter", newsletterRoute);
-app.use("/api/gallery", galleryRoute)
+app.use("/api/gallery", galleryRoute) 
+app.use("/api/resend", resendRoute)
+
+
 
 // -----------------------------
 // Health / Ping endpoints

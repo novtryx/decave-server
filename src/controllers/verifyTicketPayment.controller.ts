@@ -189,3 +189,92 @@ export const checkInTicket = async (req: Request, res: Response) => {
     res.status(500).json({ message: "Check-in failed", err });
   }
 };
+
+
+
+
+export const resendTicketEmail = async (req: Request, res: Response) => {
+  try {
+    const { ticketId, email } = req.body;
+
+    if (!ticketId || !email) {
+      return res.status(400).json({ message: "ticketId and email are required" });
+    }
+
+    // 1️⃣ Find transaction containing this ticketId
+    const transaction = await transactionHistoryModel.findOne({
+      "buyers.ticketId": ticketId
+    });
+
+    if (!transaction) {
+      return res.status(404).json({ message: "Ticket not found" });
+    }
+
+    if (transaction.status !== "completed") {
+      return res.status(400).json({ message: "Payment not completed for this ticket" });
+    }
+
+    // 2️⃣ Find the specific buyer
+    const buyer = transaction.buyers.find((b: any) => b.ticketId === ticketId);
+
+    if (!buyer) {
+      return res.status(404).json({ message: "Buyer not found for this ticket" });
+    }
+
+    // 3️⃣ Fetch event and ticket details
+    const event = await eventModel.findById(transaction.event);
+
+    if (!event) {
+      return res.status(404).json({ message: "Event not found" });
+    }
+
+    const ticket = event.tickets.find(
+      (t: any) => t._id.toString() === transaction.ticket.toString()
+    );
+
+    if (!ticket) {
+      return res.status(404).json({ message: "Ticket type not found in event" });
+    }
+
+    // 4️⃣ Generate PDF and send email to the provided address
+    const pdfBuffer = await generateTicketPDF({
+      buyer,
+      event: event.eventDetails,
+      ticket,
+      transaction
+    });
+
+    const result = await transporter.sendMail({
+      from: '"DeCave Ticket " <info@decavemgt.com>',
+      to: email, // use the provided email, not buyer.email
+      subject: `Your Ticket for ${event.eventDetails.eventTitle}`,
+      html: ticketEmailTemplate({
+        buyer,
+        event: event.eventDetails,
+        ticket,
+        transaction
+      }),
+      attachments: [
+        {
+          filename: `Ticket-${buyer.ticketId}.pdf`,
+          content: pdfBuffer,
+          contentType: "application/pdf"
+        }
+      ]
+    });
+
+    console.log("Resend result:", result);
+
+    res.status(200).json({
+      success: true,
+      message: `Ticket resent to ${email}`
+    });
+
+  } catch (err: any) {
+    console.error("RESEND TICKET ERROR:", err);
+    res.status(500).json({
+      message: "Failed to resend ticket",
+      error: err.message
+    });
+  }
+};

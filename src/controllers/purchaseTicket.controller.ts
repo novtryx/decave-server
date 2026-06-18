@@ -28,7 +28,7 @@ const calculatePaystackCharge = (amount: number) => {
 
 export const purchaseTicket = async (req: Request, res: Response) => {
   try {
-    const { eventId, ticketId, buyers, amount, referralCode } = req.body;
+    const { eventId, ticketId, buyers, amount, referralCode, groupTicket = false, } = req.body;
 
     if (!buyers || buyers.length === 0) {
       return res.status(400).json({ message: "Buyers required" });
