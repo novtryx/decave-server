@@ -8,7 +8,7 @@ import {
   DASHBOARD_RANGES,
   getDashboardDateRange,
   buildDateMatch
-} from "../utils/dateRange";
+} from "../utils/daterange";
 
 const DASHBOARD_CACHE_KEY = "dashboard:stats";
 const DASHBOARD_CACHE_TTL = 60; // seconds
