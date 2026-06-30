@@ -8,7 +8,7 @@ import {
   DASHBOARD_RANGES,
   getDashboardDateRange,
   buildDateMatch
-} from "../utils/daterange";
+} from "../utils/dateRange";
 
 const DASHBOARD_CACHE_KEY = "dashboard:stats";
 const DASHBOARD_CACHE_TTL = 60; // seconds
@@ -481,17 +481,31 @@ export class TransactionService {
     const currentMatch = buildDateMatch("createdAt", dateRange.current);
     const previousMatch = buildDateMatch("createdAt", dateRange.previous);
 
-    const [current, previous] = await Promise.all([
-      transactionHistoryModel.countDocuments({
-        status: "completed",
-        ...(currentMatch || {})
-      }),
-      previousMatch
-        ? transactionHistoryModel.countDocuments({
+    // "Tickets sold" must count actual buyers, not transactions — a
+    // single completed transaction can carry multiple buyers (a group
+    // purchase), and each buyer is one ticket.
+    const sumTicketsInWindow = async (match: Record<string, any> | null) => {
+      const [result] = await transactionHistoryModel.aggregate([
+        {
+          $match: {
             status: "completed",
-            ...previousMatch
-          })
-        : null
+            ...(match || {})
+          }
+        },
+        {
+          $group: {
+            _id: null,
+            total: { $sum: { $size: "$buyers" } }
+          }
+        }
+      ]);
+
+      return result?.total || 0;
+    };
+
+    const [current, previous] = await Promise.all([
+      sumTicketsInWindow(currentMatch),
+      previousMatch ? sumTicketsInWindow(previousMatch) : Promise.resolve(null)
     ]);
 
     return this.withTrend(current, previous, "currentPeriod", "previousPeriod");
