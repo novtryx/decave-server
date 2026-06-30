@@ -1,10 +1,28 @@
+import mongoose from "mongoose";
 import eventModel from "../models/event.model";
+import transactionHistoryModel from "../models/transactionHistory.model";
 import { IEvent } from "../types/database.types";
 import { connectDB } from "../config/database";
+import {
+  DashboardRange,
+  DashboardDateRange,
+  getDashboardDateRange
+} from "../utils/daterange";
 
 export class EventService {
   private async ensureConnection() {
     await connectDB();
+  }
+
+  /**
+   * Creates an Error tagged with an HTTP status code so controllers can
+   * distinguish client errors (bad input / business rule violations)
+   * from genuine server failures, instead of everything collapsing to 500.
+   */
+  private businessError(message: string, statusCode: number = 400): Error {
+    const err: any = new Error(message);
+    err.statusCode = statusCode;
+    return err;
   }
 
   // Create new event (Stage 1)
@@ -86,13 +104,78 @@ export class EventService {
   }
 
   // Update event (any stage)
+  /**
+   * Sums completed sales for a single ticket type. This is the ground
+   * truth used to stop edits from ever putting inventory in an
+   * impossible state (e.g. fewer tickets printed than already sold).
+   */
+  private async getSoldQuantityForTicket(eventId: string, ticketId: string): Promise<number> {
+    const [result] = await transactionHistoryModel.aggregate([
+      {
+        $match: {
+          event: new mongoose.Types.ObjectId(eventId),
+          ticket: new mongoose.Types.ObjectId(ticketId),
+          status: "completed",
+        },
+      },
+      { $project: { count: { $size: "$buyers" } } },
+      { $group: { _id: null, total: { $sum: "$count" } } },
+    ]);
+
+    return result?.total || 0;
+  }
+
   async updateEvent(id: string, updateData: Partial<IEvent>): Promise<IEvent | null> {
     try {
       await this.ensureConnection();
 
+      // ---------------------------------------------------------------
+      // Guard: if a full `tickets` array is part of this update, make
+      // sure no ticket that already has completed sales is silently
+      // dropped (which would orphan transactions/QR codes/check-ins),
+      // and no kept ticket's initialQuantity is set below what's
+      // already been sold.
+      // ---------------------------------------------------------------
+      if (updateData.tickets) {
+        const existingEvent = await eventModel.findById(id).lean();
+        if (!existingEvent) {
+          throw this.businessError("Event not found", 404);
+        }
+
+        const incomingIds = new Set(
+          (updateData.tickets as any[])
+            .map((t) => t._id?.toString())
+            .filter(Boolean)
+        );
+
+        for (const existingTicket of existingEvent.tickets || []) {
+          const ticketId = (existingTicket as any)._id.toString();
+          const sold = await this.getSoldQuantityForTicket(id, ticketId);
+
+          if (sold > 0 && !incomingIds.has(ticketId)) {
+            throw this.businessError(
+              `Cannot remove ticket "${existingTicket.ticketName}" — it has ${sold} completed sale(s) attached to it`,
+              409
+            );
+          }
+        }
+
+        for (const incoming of updateData.tickets as any[]) {
+          if (!incoming._id) continue; // brand-new ticket, nothing sold yet
+          const sold = await this.getSoldQuantityForTicket(id, incoming._id.toString());
+
+          if (sold > incoming.initialQuantity) {
+            throw this.businessError(
+              `Cannot set initial quantity for ticket "${incoming.ticketName}" below ${sold} — it already has ${sold} completed sale(s)`,
+              409
+            );
+          }
+        }
+      }
+
       // Flatten nested objects to dot notation
       const flattenedUpdate: any = {};
-      
+
       Object.keys(updateData).forEach(key => {
         if (key === 'aboutEvent' && updateData.aboutEvent) {
           // Handle aboutEvent specifically with dot notation
@@ -112,124 +195,155 @@ export class EventService {
 
       return updatedEvent;
     } catch (error: any) {
+      if (error.statusCode) throw error;
       throw new Error(`Error updating event: ${error.message}`);
     }
   }
 
 
-async updateEventTicket(
-  eventId: string,
-  ticketId: string,
-  updateData: Partial<{
-    ticketName: string;
-    price: number; // allowed in payload, but ignored
-    currency: string;
-    availableQuantity: number;
-    benefits: string[];
-  }>
-): Promise<IEvent | null> {
-  try {
-    await this.ensureConnection();
+  /**
+   * Updates a single ticket type in place, preserving its _id (and
+   * therefore every transaction/QR code/check-in that references it).
+   *
+   * Quantity semantics are intentionally explicit and independent:
+   *  - `initialQuantity` is the total print run. Changing it shifts
+   *    `availableQuantity` by the same delta (raise it = restock,
+   *    lower it = retire unsold stock), but can never drop below
+   *    however many have already sold.
+   *  - `availableQuantity` is the live, purchasable count. Setting it
+   *    directly never touches `initialQuantity`, and can't exceed it.
+   *
+   * Price is immutable post-creation; if a caller attempts to change
+   * it, that's surfaced as a warning rather than silently dropped.
+   */
+  async updateEventTicket(
+    eventId: string,
+    ticketId: string,
+    updateData: Partial<{
+      ticketName: string;
+      price: number; // accepted in payload, never applied — see warnings
+      currency: string;
+      availableQuantity: number;
+      initialQuantity: number;
+      benefits: string[];
+      saleStartDate: Date | null;
+      saleEndDate: Date | null;
+    }>
+  ): Promise<{ event: IEvent; warnings: string[] }> {
+    try {
+      await this.ensureConnection();
 
-    const event = await eventModel.findById(eventId);
-    if (!event) throw new Error("Event not found");
+      const event = await eventModel.findById(eventId);
+      if (!event) throw this.businessError("Event not found", 404);
 
-    const ticket = event.tickets.find(
-      (t: any) => t._id.toString() === ticketId
-    );
-    if (!ticket) throw new Error("Ticket not found");
+      const ticket = event.tickets.find(
+        (t: any) => t._id.toString() === ticketId
+      );
+      if (!ticket) throw this.businessError("Ticket not found", 404);
 
-    // =========================
-    // Update Basic Fields
-    // =========================
-    if (updateData.ticketName !== undefined)
-      ticket.ticketName = updateData.ticketName;
-
-    // ✅ Ignore price updates completely
-    // if (updateData.price !== undefined) { ... } <- removed
-
-    if (updateData.currency !== undefined)
-      ticket.currency = updateData.currency;
-
-    if (updateData.benefits !== undefined)
-      ticket.benefits = updateData.benefits;
-
-    // =========================
-    // 🔥 Advanced Quantity Logic
-    // =========================
-    if (updateData.availableQuantity !== undefined) {
-      const newAvailable = updateData.availableQuantity;
-      const currentAvailable = ticket.availableQuantity;
-      const currentInitial = ticket.initialQuantity;
-
-      if (newAvailable < 0) {
-        throw new Error("Available quantity cannot be negative");
+      const warnings: string[] = [];
+      if ((updateData as any).price !== undefined) {
+        warnings.push(
+          "Ticket price cannot be changed after creation; the supplied price was ignored"
+        );
       }
 
-      // CASE 1: Set available to 0
-      if (newAvailable === 0) {
-        ticket.initialQuantity = currentInitial - currentAvailable;
-        ticket.availableQuantity = 0;
+      if (updateData.ticketName !== undefined) ticket.ticketName = updateData.ticketName;
+      if (updateData.currency !== undefined) ticket.currency = updateData.currency;
+      if (updateData.benefits !== undefined) ticket.benefits = updateData.benefits;
+      if (updateData.saleStartDate !== undefined) (ticket as any).saleStartDate = updateData.saleStartDate;
+      if (updateData.saleEndDate !== undefined) (ticket as any).saleEndDate = updateData.saleEndDate;
+
+      const startDate = (ticket as any).saleStartDate;
+      const endDate = (ticket as any).saleEndDate;
+      if (startDate && endDate && new Date(endDate) <= new Date(startDate)) {
+        throw this.businessError('"saleEndDate" must be after "saleStartDate"', 400);
       }
-      // CASE 2: Increase available (restock)
-      else if (newAvailable > currentAvailable) {
-        const difference = newAvailable - currentAvailable;
-        ticket.initialQuantity = currentInitial + difference;
-        ticket.availableQuantity = newAvailable;
+
+      // Ground truth: tickets actually sold so far for this type.
+      const sold = await this.getSoldQuantityForTicket(eventId, ticketId);
+
+      let nextInitial = ticket.initialQuantity;
+      let nextAvailable = ticket.availableQuantity;
+
+      if (updateData.initialQuantity !== undefined) {
+        if (updateData.initialQuantity < sold) {
+          throw this.businessError(
+            `Initial quantity cannot be set below ${sold} — ${sold} ticket(s) of this type have already been sold`,
+            409
+          );
+        }
+        const delta = updateData.initialQuantity - nextInitial;
+        nextInitial = updateData.initialQuantity;
+        nextAvailable = Math.max(0, nextAvailable + delta);
       }
-      // CASE 3: Decrease available normally
-      else {
-        ticket.availableQuantity = newAvailable;
+
+      if (updateData.availableQuantity !== undefined) {
+        if (updateData.availableQuantity > nextInitial) {
+          throw this.businessError(
+            `Available quantity (${updateData.availableQuantity}) cannot exceed initial quantity (${nextInitial})`,
+            400
+          );
+        }
+        nextAvailable = updateData.availableQuantity;
       }
+
+      ticket.initialQuantity = nextInitial;
+      ticket.availableQuantity = nextAvailable;
+
+      await event.save();
+      return { event, warnings };
+
+    } catch (error: any) {
+      if (error.statusCode) throw error;
+      throw new Error(
+        `Error updating event ticket: ${error.message}`
+      );
     }
-
-    await event.save();
-    return event;
-
-  } catch (error: any) {
-    throw new Error(
-      `Error updating event ticket: ${error.message}`
-    );
   }
-}
 
 
 
 
-async createEventTicket(
-  eventId: string,
-  data: {
-    ticketName: string;
-    price: number;
-    currency?: string;
-    initialQuantity: number;
-    benefits?: string[];
+  async createEventTicket(
+    eventId: string,
+    data: {
+      ticketName: string;
+      price: number;
+      currency?: string;
+      initialQuantity: number;
+      benefits?: string[];
+      saleStartDate?: Date | null;
+      saleEndDate?: Date | null;
+    }
+  ): Promise<IEvent | null> {
+    try {
+      await this.ensureConnection();
+
+      const event = await eventModel.findById(eventId);
+      if (!event) throw this.businessError("Event not found", 404);
+
+      event.tickets.push({
+        ticketName: data.ticketName,
+        price: data.price,
+        currency: data.currency ?? "NGN",
+        initialQuantity: data.initialQuantity,
+        availableQuantity: data.initialQuantity,
+        benefits: data.benefits ?? [],
+        saleStartDate: data.saleStartDate ?? null,
+        saleEndDate: data.saleEndDate ?? null,
+      } as any);
+
+      await event.save();
+      return event;
+
+    } catch (error: any) {
+      if (error.statusCode) throw error;
+      throw new Error(
+        `Error creating event ticket: ${error.message}`
+      );
+    }
   }
-): Promise<IEvent | null> {
-  try {
-    await this.ensureConnection();
-
-    const event = await eventModel.findById(eventId);
-    if (!event) throw new Error("Event not found");
-
-    event.tickets.push({
-      ticketName: data.ticketName,
-      price: data.price,
-      currency: data.currency ?? "NGN",
-      initialQuantity: data.initialQuantity,
-      availableQuantity: data.initialQuantity,
-      benefits: data.benefits ?? [],
-    } as any);
-
-    await event.save();
-    return event;
-
-  } catch (error: any) {
-    throw new Error(
-      `Error creating event ticket: ${error.message}`
-    );
-  }
-}
 
 
 
@@ -245,7 +359,7 @@ async createEventTicket(
 
       const event = await eventModel.findById(id);
       if (!event) {
-        throw new Error("Event not found");
+        throw this.businessError("Event not found", 404);
       }
 
       // Update based on stage
@@ -257,10 +371,45 @@ async createEventTicket(
           event.aboutEvent = stageData.aboutEvent;
           event.stage = 2;
           break;
-        case 3:
+        case 3: {
+          // Same safety net as the general update path: don't let a
+          // resubmitted tickets array silently drop a ticket that
+          // already has completed sales, or shrink one below what's
+          // already sold.
+          const incomingIds = new Set(
+            (stageData.tickets as any[])
+              .map((t) => t._id?.toString())
+              .filter(Boolean)
+          );
+
+          for (const existingTicket of event.tickets || []) {
+            const ticketId = (existingTicket as any)._id.toString();
+            const sold = await this.getSoldQuantityForTicket(id, ticketId);
+
+            if (sold > 0 && !incomingIds.has(ticketId)) {
+              throw this.businessError(
+                `Cannot remove ticket "${existingTicket.ticketName}" — it has ${sold} completed sale(s) attached to it`,
+                409
+              );
+            }
+          }
+
+          for (const incoming of stageData.tickets as any[]) {
+            if (!incoming._id) continue; // brand-new ticket, nothing sold yet
+            const sold = await this.getSoldQuantityForTicket(id, incoming._id.toString());
+
+            if (sold > incoming.initialQuantity) {
+              throw this.businessError(
+                `Cannot set initial quantity for ticket "${incoming.ticketName}" below ${sold} — it already has ${sold} completed sale(s)`,
+                409
+              );
+            }
+          }
+
           event.tickets = stageData.tickets;
           event.stage = 3;
           break;
+        }
         case 4:
           event.artistLineUp = stageData.artistLineUp || [];
           event.stage = 4;
@@ -273,12 +422,13 @@ async createEventTicket(
           }
           break;
         default:
-          throw new Error("Invalid stage number");
+          throw this.businessError("Invalid stage number", 400);
       }
 
       await event.save();
       return event;
     } catch (error: any) {
+      if (error.statusCode) throw error;
       throw new Error(`Error updating event stage: ${error.message}`);
     }
   }
@@ -478,86 +628,65 @@ async createEventTicket(
     }
   }
 
-  async getActiveEventsCount() {
+  /**
+   * Count published events whose run overlaps the given window
+   * (i.e. they were "active" at some point in that period).
+   */
+  async getActiveEventsCount(range: DashboardRange = "all") {
     try {
       await this.ensureConnection();
-      const now = new Date();
+      const dateRange = getDashboardDateRange(range);
 
-      const currentMonthStart = new Date(now.getFullYear(), now.getMonth(), 1);
-      const lastMonthStart = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-      const lastMonthEnd = new Date(now.getFullYear(), now.getMonth(), 0, 23, 59, 59, 999);
+      const countActiveInWindow = async (window: DashboardDateRange["current"] | null) => {
+        if (!window) return null;
 
-      // Current month active events (published and not ended)
-      const currentMonthActive = await eventModel.countDocuments({
-        published: true,
-        "eventDetails.endDate": { $gte: currentMonthStart }
-      });
+        const query: any = {
+          published: true,
+          "eventDetails.startDate": { $lte: window.end },
+        };
 
-      // Last month active events
-      const lastMonthActive = await eventModel.countDocuments({
-        published: true,
-        "eventDetails.endDate": { $gte: lastMonthStart },
-        createdAt: { $lte: lastMonthEnd }
-      });
+        if (window.start) {
+          query["eventDetails.endDate"] = { $gte: window.start };
+        }
 
-      // Calculate percentage change
-      let percentageChange = 0;
-      if (lastMonthActive > 0) {
-        percentageChange = ((currentMonthActive - lastMonthActive) / lastMonthActive) * 100;
-      } else if (currentMonthActive > 0) {
-        percentageChange = 100;
-      }
-
-      return {
-        currentMonth: currentMonthActive,
-        lastMonth: lastMonthActive,
-        percentageChange: parseFloat(percentageChange.toFixed(2)),
-        trend: percentageChange > 0 ? "up" : percentageChange < 0 ? "down" : "stable"
+        return eventModel.countDocuments(query);
       };
+
+      const [current, previous] = await Promise.all([
+        countActiveInWindow(dateRange.current),
+        dateRange.previous ? countActiveInWindow(dateRange.previous) : Promise.resolve(null),
+      ]);
+
+      return this.withTrend(current as number, previous, "currentPeriod", "previousPeriod");
     } catch (error: any) {
       throw new Error(`Error fetching active events count: ${error.message}`);
     }
   }
 
   /**
-   * Get average ticket price with percentage change compared to last month
-   * Only includes published, active events
+   * Get average ticket price across published events created within
+   * the given window, with trend vs. the equivalent prior window.
    */
-  async getAverageTicketPriceStats() {
+  async getAverageTicketPriceStats(range: DashboardRange = "all") {
     try {
       await this.ensureConnection();
+      const dateRange = getDashboardDateRange(range);
 
-      const now = new Date();
-      const currentMonthStart = new Date(now.getFullYear(), now.getMonth(), 1);
-      const lastMonthStart = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-      const lastMonthEnd = new Date(now.getFullYear(), now.getMonth(), 0, 23, 59, 59, 999);
+      const [current, previous] = await Promise.all([
+        this.calculateAverageTicketPrice(dateRange.current),
+        dateRange.previous
+          ? this.calculateAverageTicketPrice(dateRange.previous)
+          : Promise.resolve(null),
+      ]);
 
-      // Get current month average
-      const currentMonthAvg = await this.calculateAverageTicketPrice(
-        currentMonthStart,
-        now
-      );
-
-      // Get last month average
-      const lastMonthAvg = await this.calculateAverageTicketPrice(
-        lastMonthStart,
-        lastMonthEnd
-      );
-
-      // Calculate percentage change
-      let percentageChange = 0;
-      if (lastMonthAvg > 0) {
-        percentageChange = ((currentMonthAvg - lastMonthAvg) / lastMonthAvg) * 100;
-      } else if (currentMonthAvg > 0) {
-        percentageChange = 100;
-      }
+      const trend = this.withTrend(current, previous, "currentPeriod", "previousPeriod");
 
       return {
-        currentMonth: parseFloat(currentMonthAvg.toFixed(2)),
-        lastMonth: parseFloat(lastMonthAvg.toFixed(2)),
-        percentageChange: parseFloat(percentageChange.toFixed(2)),
-        trend: percentageChange > 0 ? "up" : percentageChange < 0 ? "down" : "stable",
-        currency: "NGN" // Adjust based on your currency
+        ...trend,
+        currentPeriod: Number((trend.currentPeriod as number).toFixed(2)),
+        previousPeriod:
+          trend.previousPeriod === null ? null : Number((trend.previousPeriod as number).toFixed(2)),
+        currency: "NGN", // Adjust based on your currency
       };
     } catch (error: any) {
       throw new Error(`Error fetching average ticket price stats: ${error.message}`);
@@ -565,21 +694,55 @@ async createEventTicket(
   }
 
   /**
-   * Helper method to calculate average ticket price for a date range
-   * Only includes published events that are not past events
+   * Shared percentage-change/trend calculator. `previous === null` means
+   * there is no comparable prior period (i.e. range === "all"), in which
+   * case trend reporting is intentionally omitted rather than faked.
+   */
+  private withTrend(
+    current: number,
+    previous: number | null,
+    currentKey: string,
+    previousKey: string
+  ) {
+    if (previous === null) {
+      return {
+        [currentKey]: current,
+        [previousKey]: null,
+        percentageChange: null,
+        trend: null,
+      } as any;
+    }
+
+    const percentageChange =
+      previous > 0 ? ((current - previous) / previous) * 100 : current > 0 ? 100 : 0;
+
+    return {
+      [currentKey]: current,
+      [previousKey]: previous,
+      percentageChange: Number(percentageChange.toFixed(2)),
+      trend: percentageChange > 0 ? "up" : percentageChange < 0 ? "down" : "stable",
+    } as any;
+  }
+
+  /**
+   * Helper method to calculate average ticket price for a date window.
+   * Only includes published events that hadn't ended before the window
+   * started, created within the window.
    */
   private async calculateAverageTicketPrice(
-    startDate: Date,
-    endDate: Date
+    window: DashboardDateRange["current"]
   ): Promise<number> {
-    const events = await eventModel.find({
+    const query: any = {
       published: true,
-      "eventDetails.endDate": { $gte: startDate },
-      createdAt: {
-        $gte: startDate,
-        $lte: endDate
-      }
-    }).lean();
+      createdAt: { $lte: window.end },
+    };
+
+    if (window.start) {
+      query["eventDetails.endDate"] = { $gte: window.start };
+      query.createdAt = { $gte: window.start, $lte: window.end };
+    }
+
+    const events = await eventModel.find(query).lean();
 
     if (events.length === 0) {
       return 0;
@@ -605,19 +768,20 @@ async createEventTicket(
   /**
    * Get combined event dashboard stats
    */
-  async getEventDashboardStats() {
+  async getEventDashboardStats(range: DashboardRange = "all") {
     try {
       await this.ensureConnection();
 
       const [activeEventsStats, avgTicketPriceStats] = await Promise.all([
-        this.getActiveEventsCount(),
-        this.getAverageTicketPriceStats()
+        this.getActiveEventsCount(range),
+        this.getAverageTicketPriceStats(range),
       ]);
 
       return {
+        range,
         activeEvents: activeEventsStats,
         averageTicketPrice: avgTicketPriceStats,
-        generatedAt: new Date()
+        generatedAt: new Date(),
       };
     } catch (error: any) {
       throw new Error(`Error fetching event dashboard stats: ${error.message}`);

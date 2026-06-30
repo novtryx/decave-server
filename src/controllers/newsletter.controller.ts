@@ -1,10 +1,10 @@
 import { Request, Response } from "express";
 import Newsletter from "../models/newsletter.model";
-import { client, transporter } from "../config/mailer";
+import { transporter } from "../config/mailer";
 import { newsletterSubscribedEmail } from "../utils/newsletterSubscribed";
 import newsletterModel from "../models/newsletter.model";
 import { newsletterTemplate } from "../utils/newsletterBulkMail";
-import axios from "axios";
+import { sendBulkEmail } from "../utils/bulkMail";
 
 export const subscribeToNewsletter = async (
   req: Request,
@@ -44,7 +44,7 @@ export const subscribeToNewsletter = async (
       to: email,
       subject: "Newsletter Subscription Confirmed",
       html: newsletterSubscribedEmail(
-        `https://decave-demo-server.vercel.app/decave-logo.png`
+        `https://api.decavemgt.com/decave-logo.png`
       )
     });
 
@@ -143,92 +143,6 @@ export const getAllSubscribedEmail = async (req: Request, res: Response) => {
     });
   }
 };
-export const maxDuration = 300; // 5 minutes — Vercel Pro only
-
-const BATCH_SIZE = 50;
-const BATCH_DELAY_MS = 1000;
-
-const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-
-const zeptoClient = axios.create({
-  baseURL: "https://api.zeptomail.com/v1.1",
-  headers: {
-    Authorization: process.env.ZEPTO_API_KEY!,
-    "Content-Type": "application/json",
-    Accept: "application/json",
-  },
-  timeout: 10000,
-});
-
-const sendSingleMail = async (
-  email: string,
-  subject: string,
-  body: string
-) => {
-  return zeptoClient.post("/email", {
-    from: {
-      address: "info@decavemgt.com",
-      name: "DeCave Management",
-    },
-    to: [
-      {
-        email_address: {
-          address: email,
-          name: email.split("@")[0],
-        },
-      },
-    ],
-    subject,
-    htmlbody: newsletterTemplate(
-      `https://decave-demo-server.vercel.app/decave-logo.png`,
-      body
-    ),
-  });
-};
-
-const sendInBatches = async (
-  emails: string[],
-  subject: string,
-  body: string
-): Promise<{ sent: number; failed: string[] }> => {
-  const batches: string[][] = [];
-
-  for (let i = 0; i < emails.length; i += BATCH_SIZE) {
-    batches.push(emails.slice(i, i + BATCH_SIZE));
-  }
-
-  let totalSent = 0;
-  const failedEmails: string[] = [];
-
-  for (let i = 0; i < batches.length; i++) {
-    const batch = batches[i];
-
-    const results = await Promise.allSettled(
-      batch.map((email) => sendSingleMail(email, subject, body))
-    );
-
-    results.forEach((result, index) => {
-      if (result.status === "fulfilled") {
-        totalSent++;
-      } else {
-        const reason = result.reason?.response?.data || result.reason?.message;
-        console.error(`❌ Failed for ${batch[index]}:`, reason);
-        failedEmails.push(batch[index]);
-      }
-    });
-
-    console.log(
-      `✅ Batch ${i + 1}/${batches.length} processed (${batch.length} emails)`
-    );
-
-    if (i < batches.length - 1) {
-      await sleep(BATCH_DELAY_MS);
-    }
-  }
-
-  return { sent: totalSent, failed: failedEmails };
-};
-
 export const sendNewsletter = async (req: Request, res: Response) => {
   try {
     const { subject, body, emails, sendToAll } = req.body;
@@ -269,63 +183,17 @@ export const sendNewsletter = async (req: Request, res: Response) => {
       targetEmails = emails;
     }
 
-    // Split into batches of 50
-    const batches: string[][] = [];
-    for (let i = 0; i < targetEmails.length; i += 50) {
-      batches.push(targetEmails.slice(i, i + 50));
-    }
-
-    let totalSent = 0;
-    const failedBatches: number[] = [];
-
-    // Send all batches concurrently — no waiting between them
-    const results = await Promise.allSettled(
-      batches.map((batch, index) =>
-        zeptoClient.post("/email", {
-          from: {
-            address: "info@decavemgt.com",
-            name: "DeCave Management",
-          },
-          to: [
-            {
-              email_address: {
-                address: "info@decavemgt.com",
-                name: "DeCave Management",
-              },
-            },
-          ],
-          bcc: batch.map((email) => ({
-            email_address: {
-              address: email,
-              name: email.split("@")[0],
-            },
-          })),
-          subject,
-          htmlbody: newsletterTemplate(
-            `https://decave-demo-server.vercel.app/decave-logo.png`,
-            body
-          ),
-        })
-      )
+    const htmlBody = newsletterTemplate(
+      `https://api.decavemgt.com/decave-logo.png`,
+      body
     );
 
-    results.forEach((result, index) => {
-      if (result.status === "fulfilled") {
-        totalSent += batches[index].length;
-        console.log(`✅ Batch ${index + 1}/${batches.length} sent`);
-      } else {
-        console.error(
-          `❌ Batch ${index + 1} failed:`,
-          result.reason?.response?.data || result.reason?.message
-        );
-        failedBatches.push(index + 1);
-      }
-    });
+    const result = await sendBulkEmail(targetEmails, subject, htmlBody);
 
     return res.status(200).json({
       message: "Newsletter sent successfully",
-      sentCount: totalSent,
-      failedBatches: failedBatches.length > 0 ? failedBatches : undefined,
+      sentCount: result.sentCount,
+      failedBatches: result.failedBatches.length > 0 ? result.failedBatches : undefined,
       success: true,
     });
 

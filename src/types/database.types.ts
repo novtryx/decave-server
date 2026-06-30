@@ -70,6 +70,8 @@ export interface IEvent extends Document {
         initialQuantity:number;
         availableQuantity: number;
         benefits:string[];
+        saleStartDate?: Date | null;
+        saleEndDate?: Date | null;
         _id:mongoose.Types.ObjectId
 
   }[];

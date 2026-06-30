@@ -3,6 +3,9 @@ import eventService from "../services/event.service";
 import uploadService from "../services/upload.service";
 import { AuthRequest } from "../middleware/auth.middleware";
 import activityService  from "../services/notification.service";
+import transactionService from "../services/transaction.service";
+import { sendBulkEmail } from "../utils/bulkMail";
+import { eventFeedbackTemplate } from "../utils/eventFeedbackEmailTemplate";
 
 
 
@@ -10,6 +13,30 @@ import activityService  from "../services/notification.service";
 export const createEvent = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const eventData = req.body;
+
+    // This route accepts multipart/form-data (for the banner file upload),
+    // so nested objects like `eventDetails` may arrive as a JSON string
+    // rather than a parsed object, depending on how the client built the
+    // form. Parse defensively instead of crashing on `.eventBanner = ...`.
+    if (typeof eventData.eventDetails === "string") {
+      try {
+        eventData.eventDetails = JSON.parse(eventData.eventDetails);
+      } catch {
+        res.status(400).json({
+          success: false,
+          message: "eventDetails must be valid JSON",
+        });
+        return;
+      }
+    }
+
+    if (!eventData.eventDetails || typeof eventData.eventDetails !== "object") {
+      res.status(400).json({
+        success: false,
+        message: "eventDetails is required",
+      });
+      return;
+    }
 
     // Handle event banner upload if file is provided
     if (req.file) {
@@ -77,26 +104,21 @@ export const updateEventTicket = async (
       });
     }
 
-    const updatedEvent = await eventService.updateEventTicket(
+    const result = await eventService.updateEventTicket(
       eventIdStr,
       ticketIdStr,
       updateData
     );
 
-    if (!updatedEvent) {
-      return res.status(404).json({
-        success: false,
-        message: "Event or ticket not found",
-      });
-    }
-
     return res.status(200).json({
       success: true,
       message: "Ticket updated successfully",
-      data: updatedEvent,
+      data: result.event,
+      ...(result.warnings.length > 0 && { warnings: result.warnings }),
     });
   } catch (error: any) {
-    return res.status(500).json({
+    const statusCode = error.statusCode || 500;
+    return res.status(statusCode).json({
       success: false,
       message: error.message || "Internal server error",
     });
@@ -154,7 +176,8 @@ export const createEventTicket = async (
       data: createdEvent,
     });
   } catch (error: any) {
-    return res.status(500).json({
+    const statusCode = error.statusCode || 500;
+    return res.status(statusCode).json({
       success: false,
       message: error.message || "Internal server error",
     });
@@ -251,7 +274,8 @@ export const updateEvent = async (req: Request, res: Response): Promise<void> =>
     }
     
   } catch (error: any) {
-    res.status(500).json({
+    const statusCode = error.statusCode || 500;
+    res.status(statusCode).json({
       success: false,
       message: error.message,
     });
@@ -280,7 +304,8 @@ export const updateEventStage = async (req: AuthRequest, res: Response): Promise
       data: updatedEvent,
     });
   } catch (error: any) {
-    res.status(500).json({
+    const statusCode = error.statusCode || 500;
+    res.status(statusCode).json({
       success: false,
       message: error.message,
     });
@@ -447,6 +472,70 @@ export const getEventStats = async (req: AuthRequest, res: Response): Promise<vo
     });
   } catch (error: any) {
     res.status(500).json({
+      success: false,
+      message: error.message,
+    });
+  }
+};
+
+// Send a feedback-request email (with a Google Form link) to everyone
+// who completed a ticket purchase for this event
+export const sendEventFeedbackRequest = async (
+  req: AuthRequest,
+  res: Response
+): Promise<void> => {
+  try {
+    const { id } = req.params;
+    const { formLink, subject, message } = req.body;
+
+    const event = await eventService.getEventById(id as string);
+    if (!event) {
+      res.status(404).json({
+        success: false,
+        message: "Event not found",
+      });
+      return;
+    }
+
+    const buyers = await transactionService.getCompletedBuyerEmailsForEvent(id as string);
+
+    if (buyers.length === 0) {
+      res.status(400).json({
+        success: false,
+        message: "No completed ticket buyers found for this event",
+      });
+      return;
+    }
+
+    const eventTitle = event.eventDetails.eventTitle;
+    const htmlBody = eventFeedbackTemplate(
+      `https://api.decavemgt.com/decave-logo.png`,
+      eventTitle,
+      formLink,
+      message
+    );
+
+    const result = await sendBulkEmail(
+      buyers.map((b) => b.email),
+      subject || `How was ${eventTitle}? We'd love your feedback`,
+      htmlBody
+    );
+
+    await activityService.createActivity(
+      `Feedback request sent to ${result.sentCount} attendee(s) of "${eventTitle}"`,
+      "feedback_request_sent"
+    );
+
+    res.status(200).json({
+      success: true,
+      message: "Feedback request emails sent",
+      totalRecipients: result.totalRecipients,
+      sentCount: result.sentCount,
+      failedBatches: result.failedBatches.length > 0 ? result.failedBatches : undefined,
+    });
+  } catch (error: any) {
+    const statusCode = error.statusCode || 500;
+    res.status(statusCode).json({
       success: false,
       message: error.message,
     });

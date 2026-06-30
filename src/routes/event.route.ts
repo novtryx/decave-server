@@ -16,10 +16,16 @@ import {
   getEventByTitle,
   updateEventTicket,
   createEventTicket,
+  sendEventFeedbackRequest,
 } from "../controllers/event.controller";
 import {
   validateCreateEvent,
   validateUpdateEvent,
+  validateEventStage,
+  validateCreateTicket,
+  validateUpdateTicket,
+  validateSendFeedbackRequest,
+  parseMultipartEventFields,
 } from "../validators/event.validation";
 import { authenticate } from "../middleware/auth.middleware";
 import { uploadSingleImage } from "../middleware/upload.middleware";
@@ -31,6 +37,7 @@ router.get("/published", getPublishedEvents);
 router.get("/upcoming", getUpcomingEvents);
 router.get("/past", getPastEvents);
 router.get("/search", searchEvents);
+router.get("/stats", authenticate, getEventStats);
 
 router.get("/:id", getEventById);
 
@@ -39,6 +46,7 @@ router.post(
   "/",
   authenticate,
   uploadSingleImage,
+  parseMultipartEventFields,
   validateCreateEvent,
   createEvent
 );
@@ -56,6 +64,7 @@ router.put(
 router.post(
   "/create-ticket/:eventId",
   authenticate,
+  validateCreateTicket,
   createEventTicket
 );
 
@@ -63,12 +72,14 @@ router.post(
 router.patch(
   "/:id/stage",
   authenticate,
+  validateEventStage,
   updateEventStage
 );
 
 router.patch(
   "/:eventId/tickets/:ticketId",
   authenticate,
+  validateUpdateTicket,
   updateEventTicket
 );
 
@@ -79,6 +90,11 @@ router.patch("/:id/publish", authenticate, publishEvent);
 
 router.patch("/:id/unpublish", authenticate, unpublishEvent);
 
-router.get("/stats", authenticate, getEventStats);
+router.post(
+  "/:id/send-feedback-request",
+  authenticate,
+  validateSendFeedbackRequest,
+  sendEventFeedbackRequest
+);
 
 export default router;

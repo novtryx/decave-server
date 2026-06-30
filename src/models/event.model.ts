@@ -52,6 +52,11 @@ const TicketSchema = new Schema(
     initialQuantity: { type: Number, required: true, min: 0 },
     availableQuantity: { type: Number, required: true, min: 0 },
     benefits: { type: [String], default: [] },
+    // Optional sale window. Omitted entirely on existing documents until
+    // explicitly set — sales are treated as always-open when absent, so
+    // this is fully backward compatible with pre-existing tickets.
+    saleStartDate: { type: Date, required: false, default: null },
+    saleEndDate: { type: Date, required: false, default: null },
   },
   { _id: true }
 );

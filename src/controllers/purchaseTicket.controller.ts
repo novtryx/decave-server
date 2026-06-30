@@ -44,6 +44,15 @@ export const purchaseTicket = async (req: Request, res: Response) => {
     );
     if (!ticket) return res.status(404).json({ message: "Ticket not found in event" });
 
+    // 2️⃣b Enforce ticket sale window, if one is configured
+    const now = new Date();
+    if ((ticket as any).saleStartDate && now < new Date((ticket as any).saleStartDate)) {
+      return res.status(400).json({ message: "Ticket sales have not started yet" });
+    }
+    if ((ticket as any).saleEndDate && now > new Date((ticket as any).saleEndDate)) {
+      return res.status(400).json({ message: "Ticket sales have ended" });
+    }
+
     // 3️⃣ Check availability
     const totalQuantity = buyers.reduce(
       (sum: number, b: any) => sum + (b.quantity || 1),

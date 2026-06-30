@@ -21,7 +21,7 @@ const logo = `${process.env.APP_URL}/decave-logo.png`;
 
 const logo2 = async (): Promise<Buffer> => {
   const response = await fetch(
-    "https://decave-demo-server.vercel.app/decave-logo.png"
+    "https://api.decavemgt.com/decave-logo.png"
   );
 
   if (!response.ok) {

@@ -5,7 +5,7 @@ import { authenticate } from "../middleware/auth.middleware";
 const router = express.Router();
 
 
-router.get("/", authenticate, getDashboardAnalytics);
+router.get("/", getDashboardAnalytics);
 
 
 export default router;

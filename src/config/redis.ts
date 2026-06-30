@@ -3,6 +3,11 @@ import { createClient, RedisClientType } from 'redis';
 let redisClient: RedisClientType | null = null;
 let isConnecting = false;
 
+const REDIS_HOST = process.env.REDIS_HOST;
+const REDIS_PORT = process.env.REDIS_PORT ? parseInt(process.env.REDIS_PORT, 10) : undefined;
+const REDIS_USERNAME = process.env.REDIS_USERNAME || 'default';
+const REDIS_PASSWORD = process.env.REDIS_PASSWORD;
+
 export const getRedisClient = async (): Promise<RedisClientType> => {
   // If client exists and is connected, return it
   if (redisClient && redisClient.isOpen) {
@@ -27,16 +32,22 @@ export const getRedisClient = async (): Promise<RedisClientType> => {
     return getRedisClient(); // Retry
   }
 
+  if (!REDIS_HOST || !REDIS_PORT || !REDIS_PASSWORD) {
+    throw new Error(
+      'Redis is not configured. Set REDIS_HOST, REDIS_PORT, and REDIS_PASSWORD (and optionally REDIS_USERNAME) in the environment.'
+    );
+  }
+
   // Create new client
   isConnecting = true;
 
   try {
     redisClient = createClient({
-      username: 'default',
-      password: '2Wea7fBv84SKm6XkC2MvZ5jn7XvRyyWZ',
+      username: REDIS_USERNAME,
+      password: REDIS_PASSWORD,
       socket: {
-        host: 'redis-11468.c341.af-south-1-1.ec2.cloud.redislabs.com',
-        port: 11468,
+        host: REDIS_HOST,
+        port: REDIS_PORT,
         reconnectStrategy: (retries) => {
           if (retries > 3) {
             console.error('❌ Max Redis reconnection attempts reached');

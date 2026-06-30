@@ -8,6 +8,7 @@ interface TicketSalesDetail {
   ticketsSold: number;
   revenue: number;
   ticketPrice: number;
+  currency: string;
 }
 
 interface AnalyticsResult {
@@ -66,9 +67,18 @@ export class AnalyticsService {
       { $unwind: "$eventData" },
       { $unwind: "$eventData.tickets" },
       {
+        // Match each transaction to the *specific* ticket type it was
+        // bought for, by the ticket's real ObjectId. The previous
+        // version compared "$ticketInfo.title" (a field that doesn't
+        // exist on the transaction document) against
+        // "$eventData.tickets.title" (the real field is
+        // "ticketName") — both sides were always undefined, so every
+        // transaction silently matched every ticket type in its
+        // event, inflating sold counts and revenue for any event with
+        // more than one ticket type.
         $match: {
           $expr: {
-            $eq: ["$ticketInfo.title", "$eventData.tickets.title"],
+            $eq: ["$ticket", "$eventData.tickets._id"],
           },
         },
       },
@@ -76,8 +86,9 @@ export class AnalyticsService {
         $project: {
           eventId: "$event",
           eventTitle: "$eventData.eventDetails.eventTitle",
-          ticketTitle: "$eventData.tickets.title",
+          ticketTitle: "$eventData.tickets.ticketName",
           ticketPrice: "$eventData.tickets.price",
+          currency: "$eventData.tickets.currency",
           ticketsSold: { $size: "$buyers" },
           revenue: {
             $multiply: [{ $size: "$buyers" }, "$eventData.tickets.price"],
@@ -91,6 +102,7 @@ export class AnalyticsService {
             eventTitle: "$eventTitle",
             ticketTitle: "$ticketTitle",
             ticketPrice: "$ticketPrice",
+            currency: "$currency",
           },
           ticketsSold: { $sum: "$ticketsSold" },
           revenue: { $sum: "$revenue" },
@@ -103,6 +115,7 @@ export class AnalyticsService {
           eventTitle: "$_id.eventTitle",
           ticketTitle: "$_id.ticketTitle",
           ticketPrice: "$_id.ticketPrice",
+          currency: "$_id.currency",
           ticketsSold: 1,
           revenue: 1,
         },
@@ -154,9 +167,16 @@ export class AnalyticsService {
 
     const now = new Date();
     const startOfYear = new Date(now.getFullYear(), 0, 1);
+    const lastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+
+    // The query window must cover "last month" even when last month
+    // fell in the previous calendar year (i.e. it's currently
+    // January) — otherwise December's data is invisible, gets read
+    // as 0, and produces a fake "+100%" spike every January.
+    const matchStart = lastMonth < startOfYear ? lastMonth : startOfYear;
 
     const data = await this.transactionModel.aggregate([
-      { $match: { status: "completed", createdAt: { $gte: startOfYear } } },
+      { $match: { status: "completed", createdAt: { $gte: matchStart } } },
       {
         $lookup: {
           from: "events",
@@ -205,7 +225,6 @@ export class AnalyticsService {
 
     // Calculate current month and last month changes
     const thisMonthKey = `${now.getFullYear()}-${now.getMonth() + 1}`;
-    const lastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
     const lastMonthKey = `${lastMonth.getFullYear()}-${lastMonth.getMonth() + 1}`;
 
     const revenueThisMonth = monthRevenue[thisMonthKey] || 0;
@@ -235,13 +254,16 @@ export class AnalyticsService {
     await this.ensureConnection();
 
     const now = new Date();
-    const startYear = now.getFullYear() - years + 1;
+    // Always include at least last year in the query window, even if
+    // `years` is passed in small enough that it would otherwise be
+    // excluded — last year's figure is needed for the YoY comparison.
+    const startYear = Math.min(now.getFullYear() - years + 1, now.getFullYear() - 1);
 
     const data = await this.transactionModel.aggregate([
       {
         $match: {
           status: "completed",
-          createdAt: { $gte: new Date(`${startYear}-01-01`) },
+          createdAt: { $gte: new Date(Date.UTC(startYear, 0, 1)) },
         },
       },
       {
@@ -333,6 +355,7 @@ export class AnalyticsService {
         },
       ]),
       this.eventModel.aggregate([
+        { $match: { published: true } },
         {
           $unwind: "$tickets",
         },
