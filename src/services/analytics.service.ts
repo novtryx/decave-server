@@ -313,8 +313,33 @@ export class AnalyticsService {
   ): Promise<AnalyticsResult> {
     await this.ensureConnection();
 
-    const sumForWindow = async (window: DashboardDateRange["current"] | null) => {
-      if (!window) return { revenue: 0, tickets: 0 };
+    // Ticket count never actually needs the event/ticket join — it's
+    // just buyers.length summed across completed transactions, same
+    // as the dashboard's calculation. Keeping it join-free matters:
+    // if an event is later deleted, its transaction records aren't
+    // cascade-deleted (see eventService.deleteEvent), so a join-based
+    // count would silently drop those tickets while the dashboard's
+    // simple count wouldn't — producing two different "tickets sold"
+    // numbers for what should be the same figure.
+    const countTicketsForWindow = async (window: DashboardDateRange["current"] | null) => {
+      if (!window) return 0;
+
+      const dateMatch = buildDateMatch("createdAt", window);
+      const [result] = await this.transactionModel.aggregate([
+        { $match: { status: "completed", ...(dateMatch || {}) } },
+        { $group: { _id: null, tickets: { $sum: { $size: "$buyers" } } } },
+      ]);
+
+      return result?.tickets || 0;
+    };
+
+    // Revenue genuinely needs the ticket's price, so it does require
+    // the join — and will under-count for orphaned transactions
+    // (deleted events/tickets) since there's no price to attribute
+    // them to. That's an inherent limitation of revenue specifically,
+    // not a bug to "fix" the same way the ticket count was.
+    const sumRevenueForWindow = async (window: DashboardDateRange["current"] | null) => {
+      if (!window) return 0;
 
       const dateMatch = buildDateMatch("createdAt", window);
       const [result] = await this.transactionModel.aggregate([
@@ -336,27 +361,31 @@ export class AnalyticsService {
             revenue: {
               $sum: { $multiply: [{ $size: "$buyers" }, "$eventData.tickets.price"] },
             },
-            tickets: { $sum: { $size: "$buyers" } },
           },
         },
       ]);
 
-      return { revenue: result?.revenue || 0, tickets: result?.tickets || 0 };
+      return result?.revenue || 0;
     };
 
-    const [current, previous] = await Promise.all([
-      sumForWindow(dateRange.current),
-      dateRange.previous ? sumForWindow(dateRange.previous) : Promise.resolve(null),
-    ]);
+    const [currentTickets, previousTickets, currentRevenue, previousRevenue] =
+      await Promise.all([
+        countTicketsForWindow(dateRange.current),
+        dateRange.previous ? countTicketsForWindow(dateRange.previous) : Promise.resolve(null),
+        sumRevenueForWindow(dateRange.current),
+        dateRange.previous ? sumRevenueForWindow(dateRange.previous) : Promise.resolve(null),
+      ]);
 
     return {
       revenue: {
-        value: current.revenue,
-        changePercent: previous ? this.percentChange(current.revenue, previous.revenue) : null,
+        value: currentRevenue,
+        changePercent:
+          previousRevenue !== null ? this.percentChange(currentRevenue, previousRevenue) : null,
       },
       tickets: {
-        value: current.tickets,
-        changePercent: previous ? this.percentChange(current.tickets, previous.tickets) : null,
+        value: currentTickets,
+        changePercent:
+          previousTickets !== null ? this.percentChange(currentTickets, previousTickets) : null,
       },
     };
   }
@@ -375,7 +404,24 @@ export class AnalyticsService {
     const { groupId, label, sort } = this.getTrendGrouping(range);
     const dateMatch = buildDateMatch("createdAt", dateRange.current);
 
-    const data = await this.transactionModel.aggregate([
+    // Tickets-per-bucket: join-free, same reasoning as
+    // getRevenueAndTicketsStats — must match the headline ticket
+    // count, which doesn't depend on the event/ticket still existing.
+    const ticketsByBucketPromise = this.transactionModel.aggregate([
+      { $match: { status: "completed", ...(dateMatch || {}) } },
+      {
+        $project: {
+          groupKey: groupId,
+          ticketsSold: { $size: "$buyers" },
+        },
+      },
+      { $group: { _id: "$groupKey", tickets: { $sum: "$ticketsSold" } } },
+    ]);
+
+    // Revenue-per-bucket: needs the join for price, so it can
+    // under-count buckets containing only orphaned transactions —
+    // same inherent limitation as the headline revenue figure.
+    const revenueByBucketPromise = this.transactionModel.aggregate([
       { $match: { status: "completed", ...(dateMatch || {}) } },
       {
         $lookup: {
@@ -391,27 +437,51 @@ export class AnalyticsService {
       {
         $project: {
           groupKey: groupId,
-          ticketsSold: { $size: "$buyers" },
           revenue: {
             $multiply: [{ $size: "$buyers" }, "$eventData.tickets.price"],
           },
         },
       },
-      {
-        $group: {
-          _id: "$groupKey",
-          revenue: { $sum: "$revenue" },
-          tickets: { $sum: "$ticketsSold" },
-        },
-      },
-      { $sort: sort },
+      { $group: { _id: "$groupKey", revenue: { $sum: "$revenue" } } },
     ]);
 
-    const trend: TrendPoint[] = data.map((d: any) => ({
-      label: label(d._id),
-      revenue: d.revenue,
-      tickets: d.tickets,
-    }));
+    const [ticketsByBucket, revenueByBucket] = await Promise.all([
+      ticketsByBucketPromise,
+      revenueByBucketPromise,
+    ]);
+
+    // Merge the two by their underlying date key (not just the
+    // display label) to avoid any chance of label collisions.
+    const merged = new Map<string, { id: any; revenue: number; tickets: number }>();
+
+    ticketsByBucket.forEach((d: any) => {
+      const key = JSON.stringify(d._id);
+      merged.set(key, { id: d._id, revenue: 0, tickets: d.tickets });
+    });
+    revenueByBucket.forEach((d: any) => {
+      const key = JSON.stringify(d._id);
+      const existing = merged.get(key);
+      if (existing) {
+        existing.revenue = d.revenue;
+      } else {
+        merged.set(key, { id: d._id, revenue: d.revenue, tickets: 0 });
+      }
+    });
+
+    const trend: TrendPoint[] = Array.from(merged.values())
+      .sort((a, b) => {
+        for (const sortKey of Object.keys(sort)) {
+          const field = sortKey.replace("_id.", "");
+          const diff = (a.id[field] ?? 0) - (b.id[field] ?? 0);
+          if (diff !== 0) return diff;
+        }
+        return 0;
+      })
+      .map((d) => ({
+        label: label(d.id),
+        revenue: d.revenue,
+        tickets: d.tickets,
+      }));
 
     return { trend };
   }
