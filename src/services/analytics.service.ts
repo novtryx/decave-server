@@ -1,6 +1,13 @@
 import mongoose from "mongoose";
 import TransactionHistory from "../models/transactionHistory.model";
 import eventModel from "../models/event.model";
+import {
+  DashboardRange,
+  DashboardDateRange,
+  getDashboardDateRange,
+  buildDateMatch,
+} from "../utils/daterange";
+
 interface TicketSalesDetail {
   eventId: string;
   eventTitle: string;
@@ -22,7 +29,7 @@ interface CheckInStats {
   totalSold: number;
   totalCheckedIn: number;
   checkInRate: number; // percentage, 0-100
-  eventsConsidered: number; // events whose endDate has passed
+  eventsConsidered: number; // events whose endDate has passed, within range
 }
 
 interface PaymentHealthStats {
@@ -47,7 +54,19 @@ interface TicketSaleWindowStats {
   noWindowSet: number; // no sale window configured (always open)
 }
 
+interface MetricWithChange {
+  value: number;
+  changePercent: number | null;
+}
+
+interface TrendPoint {
+  label: string;
+  revenue: number;
+  tickets: number;
+}
+
 interface AnalyticsResult {
+  range?: DashboardRange;
   totalRevenue?: number;
   totalTickets?: number;
   totalEvents?: number;
@@ -61,17 +80,16 @@ interface AnalyticsResult {
   paymentHealth?: PaymentHealthStats;
   influencerStats?: InfluencerStats;
   ticketSaleWindowStats?: TicketSaleWindowStats;
-  monthRevenue?: Record<string, number>;
-  monthTickets?: Record<string, number>;
-  yearRevenue?: Record<number, number>;
-  yearTickets?: Record<number, number>;
-  revenueThisMonth?: { value: number; changePercent: number };
-  revenueThisYear?: { value: number; changePercent: number };
-  ticketsThisMonth?: { value: number; changePercent: number };
-  ticketsThisYear?: { value: number; changePercent: number };
-  conversionThisMonth?: { value: number; changePercent: number };
-  conversionThisYear?: { value: number; changePercent: number };
+  revenue?: MetricWithChange;
+  tickets?: MetricWithChange;
+  conversion?: MetricWithChange;
+  trend?: TrendPoint[];
 }
+
+const MONTH_LABELS = [
+  "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+  "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+];
 
 export class AnalyticsService {
   private transactionModel = TransactionHistory;
@@ -86,20 +104,74 @@ export class AnalyticsService {
   }
 
   // ==================== HELPER FUNCTIONS ====================
-  private percentChange(current: number, previous: number): number {
+  private percentChange(current: number, previous: number | null): number | null {
+    if (previous === null) return null;
     if (previous === 0) return current > 0 ? 100 : 0;
     return ((current - previous) / previous) * 100;
   }
 
+  /**
+   * Picks how to bucket the revenue/tickets trend chart based on the
+   * selected range — a flat "month vs year" toggle doesn't make sense
+   * anymore now that range is flexible, so granularity scales with
+   * window size: daily within a month, weekly within 3 months,
+   * monthly within a year, yearly for all-time.
+   */
+  private getTrendGrouping(range: DashboardRange) {
+    switch (range) {
+      case "month":
+        return {
+          groupId: {
+            year: { $year: "$createdAt" },
+            month: { $month: "$createdAt" },
+            day: { $dayOfMonth: "$createdAt" },
+          },
+          label: (id: any) => `${id.day}`,
+          sort: { "_id.year": 1, "_id.month": 1, "_id.day": 1 } as Record<string, 1>,
+        };
+      case "3months":
+        return {
+          groupId: {
+            year: { $isoWeekYear: "$createdAt" },
+            week: { $isoWeek: "$createdAt" },
+          },
+          label: (id: any) => `Wk ${id.week}`,
+          sort: { "_id.year": 1, "_id.week": 1 } as Record<string, 1>,
+        };
+      case "year":
+        return {
+          groupId: {
+            year: { $year: "$createdAt" },
+            month: { $month: "$createdAt" },
+          },
+          label: (id: any) => MONTH_LABELS[id.month - 1] ?? `${id.month}`,
+          sort: { "_id.year": 1, "_id.month": 1 } as Record<string, 1>,
+        };
+      case "all":
+      default:
+        return {
+          groupId: { year: { $year: "$createdAt" } },
+          label: (id: any) => `${id.year}`,
+          sort: { "_id.year": 1 } as Record<string, 1>,
+        };
+    }
+  }
+
   // ==================== TICKET SALES DETAILS ====================
   /**
-   * Get detailed ticket sales information including ticket title and revenue per ticket type
+   * Detailed ticket sales (revenue + count per ticket type), scoped
+   * to a date window. Pass `window: null` for no lower bound (i.e.
+   * all-time).
    */
-  public async getTicketSalesDetails(): Promise<TicketSalesDetail[]> {
+  public async getTicketSalesDetails(
+    window: DashboardDateRange["current"] | null = null
+  ): Promise<TicketSalesDetail[]> {
     await this.ensureConnection();
 
+    const dateMatch = window ? buildDateMatch("createdAt", window) : null;
+
     const salesData = await this.transactionModel.aggregate([
-      { $match: { status: "completed" } },
+      { $match: { status: "completed", ...(dateMatch || {}) } },
       {
         $lookup: {
           from: "events",
@@ -112,14 +184,7 @@ export class AnalyticsService {
       { $unwind: "$eventData.tickets" },
       {
         // Match each transaction to the *specific* ticket type it was
-        // bought for, by the ticket's real ObjectId. The previous
-        // version compared "$ticketInfo.title" (a field that doesn't
-        // exist on the transaction document) against
-        // "$eventData.tickets.title" (the real field is
-        // "ticketName") — both sides were always undefined, so every
-        // transaction silently matched every ticket type in its
-        // event, inflating sold counts and revenue for any event with
-        // more than one ticket type.
+        // bought for, by the ticket's real ObjectId.
         $match: {
           $expr: {
             $eq: ["$ticket", "$eventData.tickets._id"],
@@ -171,35 +236,28 @@ export class AnalyticsService {
   }
 
   // ==================== CORE ANALYTICS METHODS ====================
-  public async getEventTicketStats(): Promise<AnalyticsResult> {
+  public async getEventTicketStats(
+    dateRange: DashboardDateRange
+  ): Promise<AnalyticsResult> {
     await this.ensureConnection();
 
-    // Get ticket sales details with proper revenue calculation
-    const ticketSalesDetails = await this.getTicketSalesDetails();
+    const ticketSalesDetails = await this.getTicketSalesDetails(dateRange.current);
 
-    // Aggregate totals from detailed sales
-    const totalTickets = ticketSalesDetails.reduce(
-      (acc, item) => acc + item.ticketsSold,
-      0
-    );
-    const totalRevenue = ticketSalesDetails.reduce(
-      (acc, item) => acc + item.revenue,
-      0
-    );
+    const totalTickets = ticketSalesDetails.reduce((acc, item) => acc + item.ticketsSold, 0);
+    const totalRevenue = ticketSalesDetails.reduce((acc, item) => acc + item.revenue, 0);
 
-    // Count unique events
     const uniqueEvents = new Set(ticketSalesDetails.map((item) => item.eventId));
     const totalEvents = uniqueEvents.size;
 
-    // Total published events
-    const totalPublishedEvents = await this.eventModel.countDocuments({
-      published: true,
-    });
+    // Published events created within the selected window (for "all"
+    // this is every published event ever, matching the old behavior).
+    const publishedMatch: any = { published: true };
+    const createdAtMatch = buildDateMatch("createdAt", dateRange.current);
+    if (createdAtMatch) Object.assign(publishedMatch, createdAtMatch);
+    const totalPublishedEvents = await this.eventModel.countDocuments(publishedMatch);
 
     // Roll ticket-tier-level sales up to event-level, ranked by
-    // revenue (not just ticket count) — a premium event with fewer,
-    // pricier tickets can easily outearn a high-volume cheap one, so
-    // ranking by tickets sold alone is misleading.
+    // revenue (not just ticket count).
     const eventTotals = new Map<string, TopEventByRevenue>();
     for (const item of ticketSalesDetails) {
       const existing = eventTotals.get(item.eventId);
@@ -219,12 +277,12 @@ export class AnalyticsService {
       .sort((a, b) => b.revenue - a.revenue)
       .slice(0, 10);
 
-    // Average order value / tickets per order — needs the count of
-    // completed transactions (not ticket-tier rows, which can be
-    // multiple per transaction).
+    const transactionDateMatch = buildDateMatch("createdAt", dateRange.current);
     const totalCompletedTransactions = await this.transactionModel.countDocuments({
       status: "completed",
+      ...(transactionDateMatch || {}),
     });
+
     const avgOrderValue =
       totalCompletedTransactions > 0 ? totalRevenue / totalCompletedTransactions : 0;
     const avgTicketsPerOrder =
@@ -243,111 +301,82 @@ export class AnalyticsService {
     };
   }
 
-  // ==================== MONTHLY METRICS ====================
-  public async getMonthlyRevenueAndTickets(): Promise<AnalyticsResult> {
-    await this.ensureConnection();
-
-    const now = new Date();
-    const startOfYear = new Date(now.getFullYear(), 0, 1);
-    const lastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-
-    // The query window must cover "last month" even when last month
-    // fell in the previous calendar year (i.e. it's currently
-    // January) — otherwise December's data is invisible, gets read
-    // as 0, and produces a fake "+100%" spike every January.
-    const matchStart = lastMonth < startOfYear ? lastMonth : startOfYear;
-
-    const data = await this.transactionModel.aggregate([
-      { $match: { status: "completed", createdAt: { $gte: matchStart } } },
-      {
-        $lookup: {
-          from: "events",
-          localField: "event",
-          foreignField: "_id",
-          as: "eventData",
-        },
-      },
-      { $unwind: "$eventData" },
-      { $unwind: "$eventData.tickets" },
-      {
-        $match: {
-          $expr: {
-            $eq: ["$ticket", "$eventData.tickets._id"],
-          },
-        },
-      },
-      {
-        $project: {
-          month: { $month: "$createdAt" },
-          year: { $year: "$createdAt" },
-          ticketsSold: { $size: "$buyers" },
-          revenue: {
-            $multiply: [{ $size: "$buyers" }, "$eventData.tickets.price"],
-          },
-        },
-      },
-      {
-        $group: {
-          _id: { month: "$month", year: "$year" },
-          revenue: { $sum: "$revenue" },
-          tickets: { $sum: "$ticketsSold" },
-        },
-      },
-      { $sort: { "_id.year": 1, "_id.month": 1 } },
-    ]);
-
-    const monthRevenue: Record<string, number> = {};
-    const monthTickets: Record<string, number> = {};
-
-    data.forEach((d: any) => {
-      const key = `${d._id.year}-${d._id.month}`;
-      monthRevenue[key] = d.revenue;
-      monthTickets[key] = d.tickets;
-    });
-
-    // Calculate current month and last month changes
-    const thisMonthKey = `${now.getFullYear()}-${now.getMonth() + 1}`;
-    const lastMonthKey = `${lastMonth.getFullYear()}-${lastMonth.getMonth() + 1}`;
-
-    const revenueThisMonth = monthRevenue[thisMonthKey] || 0;
-    const revenueLastMonth = monthRevenue[lastMonthKey] || 0;
-
-    const ticketsThisMonth = monthTickets[thisMonthKey] || 0;
-    const ticketsLastMonth = monthTickets[lastMonthKey] || 0;
-
-    return {
-      monthRevenue,
-      monthTickets,
-      revenueThisMonth: {
-        value: revenueThisMonth,
-        changePercent: this.percentChange(revenueThisMonth, revenueLastMonth),
-      },
-      ticketsThisMonth: {
-        value: ticketsThisMonth,
-        changePercent: this.percentChange(ticketsThisMonth, ticketsLastMonth),
-      },
-    };
-  }
-
-  // ==================== YEARLY METRICS ====================
-  public async getYearlyRevenueAndTickets(
-    years: number = 7
+  // ==================== REVENUE / TICKETS (RANGE-AWARE, WITH TREND) ====================
+  /**
+   * Revenue + tickets sold for the selected range, compared against
+   * the equivalent prior window — same comparison model as the
+   * dashboard. "all" has no prior window, so changePercent is null
+   * rather than a fabricated number.
+   */
+  public async getRevenueAndTicketsStats(
+    dateRange: DashboardDateRange
   ): Promise<AnalyticsResult> {
     await this.ensureConnection();
 
-    const now = new Date();
-    // Always include at least last year in the query window, even if
-    // `years` is passed in small enough that it would otherwise be
-    // excluded — last year's figure is needed for the YoY comparison.
-    const startYear = Math.min(now.getFullYear() - years + 1, now.getFullYear() - 1);
+    const sumForWindow = async (window: DashboardDateRange["current"] | null) => {
+      if (!window) return { revenue: 0, tickets: 0 };
+
+      const dateMatch = buildDateMatch("createdAt", window);
+      const [result] = await this.transactionModel.aggregate([
+        { $match: { status: "completed", ...(dateMatch || {}) } },
+        {
+          $lookup: {
+            from: "events",
+            localField: "event",
+            foreignField: "_id",
+            as: "eventData",
+          },
+        },
+        { $unwind: "$eventData" },
+        { $unwind: "$eventData.tickets" },
+        { $match: { $expr: { $eq: ["$ticket", "$eventData.tickets._id"] } } },
+        {
+          $group: {
+            _id: null,
+            revenue: {
+              $sum: { $multiply: [{ $size: "$buyers" }, "$eventData.tickets.price"] },
+            },
+            tickets: { $sum: { $size: "$buyers" } },
+          },
+        },
+      ]);
+
+      return { revenue: result?.revenue || 0, tickets: result?.tickets || 0 };
+    };
+
+    const [current, previous] = await Promise.all([
+      sumForWindow(dateRange.current),
+      dateRange.previous ? sumForWindow(dateRange.previous) : Promise.resolve(null),
+    ]);
+
+    return {
+      revenue: {
+        value: current.revenue,
+        changePercent: previous ? this.percentChange(current.revenue, previous.revenue) : null,
+      },
+      tickets: {
+        value: current.tickets,
+        changePercent: previous ? this.percentChange(current.tickets, previous.tickets) : null,
+      },
+    };
+  }
+
+  // ==================== TREND BREAKDOWN (FOR CHARTS) ====================
+  /**
+   * Revenue/tickets over time within the selected range, bucketed at
+   * a granularity that fits the window size (day/week/month/year).
+   */
+  public async getTrendBreakdown(
+    range: DashboardRange,
+    dateRange: DashboardDateRange
+  ): Promise<AnalyticsResult> {
+    await this.ensureConnection();
+
+    const { groupId, label, sort } = this.getTrendGrouping(range);
+    const dateMatch = buildDateMatch("createdAt", dateRange.current);
 
     const data = await this.transactionModel.aggregate([
-      {
-        $match: {
-          status: "completed",
-          createdAt: { $gte: new Date(Date.UTC(startYear, 0, 1)) },
-        },
-      },
+      { $match: { status: "completed", ...(dateMatch || {}) } },
       {
         $lookup: {
           from: "events",
@@ -358,16 +387,10 @@ export class AnalyticsService {
       },
       { $unwind: "$eventData" },
       { $unwind: "$eventData.tickets" },
-      {
-        $match: {
-          $expr: {
-            $eq: ["$ticket", "$eventData.tickets._id"],
-          },
-        },
-      },
+      { $match: { $expr: { $eq: ["$ticket", "$eventData.tickets._id"] } } },
       {
         $project: {
-          year: { $year: "$createdAt" },
+          groupKey: groupId,
           ticketsSold: { $size: "$buyers" },
           revenue: {
             $multiply: [{ $size: "$buyers" }, "$eventData.tickets.price"],
@@ -376,213 +399,104 @@ export class AnalyticsService {
       },
       {
         $group: {
-          _id: { year: "$year" },
+          _id: "$groupKey",
           revenue: { $sum: "$revenue" },
           tickets: { $sum: "$ticketsSold" },
         },
       },
-      { $sort: { "_id.year": 1 } },
+      { $sort: sort },
     ]);
 
-    const yearRevenue: Record<number, number> = {};
-    const yearTickets: Record<number, number> = {};
+    const trend: TrendPoint[] = data.map((d: any) => ({
+      label: label(d._id),
+      revenue: d.revenue,
+      tickets: d.tickets,
+    }));
 
-    data.forEach((d: any) => {
-      yearRevenue[d._id.year] = d.revenue;
-      yearTickets[d._id.year] = d.tickets;
-    });
-
-    const thisYear = now.getFullYear();
-    const lastYear = thisYear - 1;
-
-    const revenueThisYear = yearRevenue[thisYear] || 0;
-    const revenueLastYear = yearRevenue[lastYear] || 0;
-
-    const ticketsThisYear = yearTickets[thisYear] || 0;
-    const ticketsLastYear = yearTickets[lastYear] || 0;
-
-    return {
-      yearRevenue,
-      yearTickets,
-      revenueThisYear: {
-        value: revenueThisYear,
-        changePercent: this.percentChange(revenueThisYear, revenueLastYear),
-      },
-      ticketsThisYear: {
-        value: ticketsThisYear,
-        changePercent: this.percentChange(ticketsThisYear, ticketsLastYear),
-      },
-    };
+    return { trend };
   }
 
-  // ==================== CONVERSION RATE ====================
-  public async getConversionRates(): Promise<AnalyticsResult> {
+  // ==================== CONVERSION RATE (SELL-THROUGH) ====================
+  /**
+   * Tickets sold in the selected range as a share of total ticket
+   * inventory across published events. This is sell-through, not
+   * funnel conversion (there's no page-view tracking in this stack
+   * to measure visits -> purchases).
+   */
+  public async getConversionRates(dateRange: DashboardDateRange): Promise<AnalyticsResult> {
     await this.ensureConnection();
 
-    const now = new Date();
-    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
-    const startOfYear = new Date(now.getFullYear(), 0, 1);
-    const startOfLastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-    const endOfLastMonth = new Date(now.getFullYear(), now.getMonth(), 0, 23, 59, 59);
+    const [totalAvailableTickets] = await this.eventModel.aggregate([
+      { $match: { published: true } },
+      { $unwind: "$tickets" },
+      { $group: { _id: null, totalTickets: { $sum: "$tickets.initialQuantity" } } },
+    ]);
+    const totalTicketsAvailable = totalAvailableTickets?.totalTickets || 0;
 
-    // Monthly conversion
-    const [monthlyTickets, totalAvailableTickets] = await Promise.all([
-      this.transactionModel.aggregate([
-        { $match: { status: "completed", createdAt: { $gte: startOfMonth } } },
-        {
-          $group: {
-            _id: null,
-            ticketsSold: { $sum: { $size: "$buyers" } },
-          },
-        },
-      ]),
-      this.eventModel.aggregate([
-        { $match: { published: true } },
-        {
-          $unwind: "$tickets",
-        },
-        {
-          $group: {
-            _id: null,
-            totalTickets: { $sum: "$tickets.initialQuantity" },
-          },
-        },
-      ]),
+    const ticketsSoldInWindow = async (window: DashboardDateRange["current"] | null) => {
+      if (!window) return 0;
+      const dateMatch = buildDateMatch("createdAt", window);
+      const [result] = await this.transactionModel.aggregate([
+        { $match: { status: "completed", ...(dateMatch || {}) } },
+        { $group: { _id: null, ticketsSold: { $sum: { $size: "$buyers" } } } },
+      ]);
+      return result?.ticketsSold || 0;
+    };
+
+    const [currentSold, previousSold] = await Promise.all([
+      ticketsSoldInWindow(dateRange.current),
+      dateRange.previous ? ticketsSoldInWindow(dateRange.previous) : Promise.resolve(null),
     ]);
 
-    const ticketsSoldThisMonth = monthlyTickets[0]?.ticketsSold || 0;
-    const totalTicketsAvailable = totalAvailableTickets[0]?.totalTickets || 1;
-
-    const conversionThisMonth =
-      totalTicketsAvailable === 0
+    const currentConversion =
+      totalTicketsAvailable === 0 ? 0 : (currentSold / totalTicketsAvailable) * 100;
+    const previousConversion =
+      previousSold === null
+        ? null
+        : totalTicketsAvailable === 0
         ? 0
-        : (ticketsSoldThisMonth / totalTicketsAvailable) * 100;
-
-    // Last month conversion for comparison
-    const [lastMonthTickets] = await Promise.all([
-      this.transactionModel.aggregate([
-        {
-          $match: {
-            status: "completed",
-            createdAt: { $gte: startOfLastMonth, $lte: endOfLastMonth },
-          },
-        },
-        {
-          $group: {
-            _id: null,
-            ticketsSold: { $sum: { $size: "$buyers" } },
-          },
-        },
-      ]),
-    ]);
-
-    const ticketsSoldLastMonth = lastMonthTickets[0]?.ticketsSold || 0;
-    const conversionLastMonth =
-      totalTicketsAvailable === 0
-        ? 0
-        : (ticketsSoldLastMonth / totalTicketsAvailable) * 100;
-
-    // Yearly conversion
-    const [yearlyTickets] = await Promise.all([
-      this.transactionModel.aggregate([
-        { $match: { status: "completed", createdAt: { $gte: startOfYear } } },
-        {
-          $group: {
-            _id: null,
-            ticketsSold: { $sum: { $size: "$buyers" } },
-          },
-        },
-      ]),
-    ]);
-
-    const ticketsSoldThisYear = yearlyTickets[0]?.ticketsSold || 0;
-
-    const conversionThisYear =
-      totalTicketsAvailable === 0
-        ? 0
-        : (ticketsSoldThisYear / totalTicketsAvailable) * 100;
-
-    // Last year conversion for comparison
-    const startOfLastYear = new Date(now.getFullYear() - 1, 0, 1);
-    const endOfLastYear = new Date(now.getFullYear() - 1, 11, 31, 23, 59, 59);
-
-    const [lastYearTickets] = await Promise.all([
-      this.transactionModel.aggregate([
-        {
-          $match: {
-            status: "completed",
-            createdAt: { $gte: startOfLastYear, $lte: endOfLastYear },
-          },
-        },
-        {
-          $group: {
-            _id: null,
-            ticketsSold: { $sum: { $size: "$buyers" } },
-          },
-        },
-      ]),
-    ]);
-
-    const ticketsSoldLastYear = lastYearTickets[0]?.ticketsSold || 0;
-    const conversionLastYear =
-      totalTicketsAvailable === 0
-        ? 0
-        : (ticketsSoldLastYear / totalTicketsAvailable) * 100;
+        : (previousSold / totalTicketsAvailable) * 100;
 
     return {
-      conversionThisMonth: {
-        value: conversionThisMonth,
-        changePercent: this.percentChange(conversionThisMonth, conversionLastMonth),
-      },
-      conversionThisYear: {
-        value: conversionThisYear,
-        changePercent: this.percentChange(conversionThisYear, conversionLastYear),
+      conversion: {
+        value: Number(currentConversion.toFixed(2)),
+        changePercent: this.percentChange(currentConversion, previousConversion),
       },
     };
   }
 
   // ==================== CHECK-IN RATE ====================
   /**
-   * What fraction of sold tickets were actually used. Only counts
-   * events that have already ended — an event still upcoming will
-   * always show 0% checked in, which isn't a meaningful "no-show"
-   * signal yet.
+   * What fraction of sold tickets were actually used, for events that
+   * have already ended within the selected window. An event still
+   * upcoming always shows 0% checked in, which isn't meaningful yet,
+   * so it's excluded rather than dragging the rate down.
    */
-  public async getCheckInStats(): Promise<AnalyticsResult> {
+  public async getCheckInStats(dateRange: DashboardDateRange): Promise<AnalyticsResult> {
     await this.ensureConnection();
 
     const now = new Date();
+    const endDateMatch: any = { $lt: now };
+    if (dateRange.current.start) endDateMatch.$gte = dateRange.current.start;
 
     const pastEventIds = await this.eventModel
-      .find({ "eventDetails.endDate": { $lt: now } })
+      .find({ "eventDetails.endDate": endDateMatch })
       .distinct("_id");
 
     if (pastEventIds.length === 0) {
       return {
-        checkInStats: {
-          totalSold: 0,
-          totalCheckedIn: 0,
-          checkInRate: 0,
-          eventsConsidered: 0,
-        },
+        checkInStats: { totalSold: 0, totalCheckedIn: 0, checkInRate: 0, eventsConsidered: 0 },
       };
     }
 
     const [result] = await this.transactionModel.aggregate([
-      {
-        $match: {
-          status: "completed",
-          event: { $in: pastEventIds },
-        },
-      },
+      { $match: { status: "completed", event: { $in: pastEventIds } } },
       { $unwind: "$buyers" },
       {
         $group: {
           _id: null,
           totalSold: { $sum: 1 },
-          totalCheckedIn: {
-            $sum: { $cond: [{ $eq: ["$buyers.checkedIn", true] }, 1, 0] },
-          },
+          totalCheckedIn: { $sum: { $cond: [{ $eq: ["$buyers.checkedIn", true] }, 1, 0] } },
         },
       },
     ]);
@@ -602,21 +516,14 @@ export class AnalyticsService {
   }
 
   // ==================== PAYMENT HEALTH ====================
-  /**
-   * Completed vs pending vs failed, across all transactions ever
-   * created — an early-warning signal for checkout/payment-provider
-   * issues independent of any single event's performance.
-   */
-  public async getPaymentHealthStats(): Promise<AnalyticsResult> {
+  public async getPaymentHealthStats(dateRange: DashboardDateRange): Promise<AnalyticsResult> {
     await this.ensureConnection();
 
+    const dateMatch = buildDateMatch("createdAt", dateRange.current);
+
     const results = await this.transactionModel.aggregate([
-      {
-        $group: {
-          _id: "$status",
-          count: { $sum: 1 },
-        },
-      },
+      ...(dateMatch ? [{ $match: dateMatch }] : []),
+      { $group: { _id: "$status", count: { $sum: 1 } } },
     ]);
 
     const counts: Record<string, number> = { completed: 0, pending: 0, failed: 0 };
@@ -638,15 +545,13 @@ export class AnalyticsService {
   }
 
   // ==================== INFLUENCER ATTRIBUTION ====================
-  /**
-   * How much of total revenue/tickets came through an influencer
-   * referral code vs. organic (direct) purchases.
-   */
-  public async getInfluencerStats(): Promise<AnalyticsResult> {
+  public async getInfluencerStats(dateRange: DashboardDateRange): Promise<AnalyticsResult> {
     await this.ensureConnection();
 
+    const dateMatch = buildDateMatch("createdAt", dateRange.current);
+
     const results = await this.transactionModel.aggregate([
-      { $match: { status: "completed" } },
+      { $match: { status: "completed", ...(dateMatch || {}) } },
       {
         $lookup: {
           from: "events",
@@ -711,19 +616,15 @@ export class AnalyticsService {
 
   // ==================== TICKET SALE WINDOW STATUS ====================
   /**
-   * How many ticket tiers (across all published events) are
-   * currently on sale, not yet open, or already closed — only
-   * meaningful now that tickets can have a sale window at all.
+   * A live snapshot of ticket sale windows right now — deliberately
+   * NOT scoped to the selected range, since "on sale" is a current
+   * state, not a historical one.
    */
   public async getTicketSaleWindowStats(): Promise<AnalyticsResult> {
     await this.ensureConnection();
 
     const now = new Date();
-
-    const events = await this.eventModel
-      .find({ published: true })
-      .select("tickets")
-      .lean();
+    const events = await this.eventModel.find({ published: true }).select("tickets").lean();
 
     const stats: TicketSaleWindowStats = {
       onSale: 0,
@@ -734,12 +635,8 @@ export class AnalyticsService {
 
     for (const event of events) {
       for (const ticket of event.tickets || []) {
-        const start = (ticket as any).saleStartDate
-          ? new Date((ticket as any).saleStartDate)
-          : null;
-        const end = (ticket as any).saleEndDate
-          ? new Date((ticket as any).saleEndDate)
-          : null;
+        const start = (ticket as any).saleStartDate ? new Date((ticket as any).saleStartDate) : null;
+        const end = (ticket as any).saleEndDate ? new Date((ticket as any).saleEndDate) : null;
 
         if (!start && !end) {
           stats.noWindowSet++;
@@ -758,35 +655,40 @@ export class AnalyticsService {
 
   // ==================== COMBINED ANALYTICS ====================
   /**
-   * Get all analytics data in a single call
+   * Get all analytics data in a single call, scoped to the given
+   * range — same range system as the dashboard (month / 3months /
+   * year / all), defaulting to "all".
    */
-  public async getAllAnalytics(years: number = 7): Promise<AnalyticsResult> {
+  public async getAllAnalytics(range: DashboardRange = "all"): Promise<AnalyticsResult> {
     await this.ensureConnection();
+
+    const dateRange = getDashboardDateRange(range);
 
     const [
       eventStats,
-      monthlyData,
-      yearlyData,
+      revenueTicketsData,
+      trendData,
       conversionData,
       checkInData,
       paymentHealthData,
       influencerData,
       ticketSaleWindowData,
     ] = await Promise.all([
-      this.getEventTicketStats(),
-      this.getMonthlyRevenueAndTickets(),
-      this.getYearlyRevenueAndTickets(years),
-      this.getConversionRates(),
-      this.getCheckInStats(),
-      this.getPaymentHealthStats(),
-      this.getInfluencerStats(),
+      this.getEventTicketStats(dateRange),
+      this.getRevenueAndTicketsStats(dateRange),
+      this.getTrendBreakdown(range, dateRange),
+      this.getConversionRates(dateRange),
+      this.getCheckInStats(dateRange),
+      this.getPaymentHealthStats(dateRange),
+      this.getInfluencerStats(dateRange),
       this.getTicketSaleWindowStats(),
     ]);
 
     return {
+      range,
       ...eventStats,
-      ...monthlyData,
-      ...yearlyData,
+      ...revenueTicketsData,
+      ...trendData,
       ...conversionData,
       ...checkInData,
       ...paymentHealthData,
