@@ -258,14 +258,22 @@ export const updateEvent = async (req: Request, res: Response): Promise<void> =>
     }
 
     if(updatedEvent.published){
-        await  activityService.createActivity( `"${updatedEvent.eventDetails.eventTitle}" is published live`, "event_published")
+        try {
+          await activityService.createActivity( `"${updatedEvent.eventDetails.eventTitle}" is published live`, "event_published")
+        } catch (activityError: any) {
+          console.error("Failed to log event_published activity:", activityError.message);
+        }
         res.status(200).json({
         success: true,
         message: "Event updated successfully",
         data: updatedEvent,
     });
     } else {
-        await  activityService.createActivity( `"${updatedEvent.eventDetails.eventTitle}" was updated`, "event_published")
+        try {
+          await activityService.createActivity( `"${updatedEvent.eventDetails.eventTitle}" was updated`, "event_updated")
+        } catch (activityError: any) {
+          console.error("Failed to log event_updated activity:", activityError.message);
+        }
          res.status(200).json({
         success: true,
         message: "Event updated successfully",
@@ -509,7 +517,7 @@ export const sendEventFeedbackRequest = async (
 
     const eventTitle = event.eventDetails.eventTitle;
     const htmlBody = eventFeedbackTemplate(
-      `https://api.decavemgt.com/decave-logo.png`,
+      `https://decave-demo-server.vercel.app/decave-logo.png`,
       eventTitle,
       formLink,
       message
@@ -521,10 +529,18 @@ export const sendEventFeedbackRequest = async (
       htmlBody
     );
 
-    await activityService.createActivity(
-      `Feedback request sent to ${result.sentCount} attendee(s) of "${eventTitle}"`,
-      "feedback_request_sent"
-    );
+    // Activity logging is a side effect, not the primary action — the
+    // emails have already gone out by this point. A logging failure
+    // (bad enum value, DB hiccup, etc.) must never turn a successful
+    // send into an error response to the client.
+    try {
+      await activityService.createActivity(
+        `Feedback request sent to ${result.sentCount} attendee(s) of "${eventTitle}"`,
+        "feedback_request_sent"
+      );
+    } catch (activityError: any) {
+      console.error("Failed to log feedback-request activity:", activityError.message);
+    }
 
     res.status(200).json({
       success: true,

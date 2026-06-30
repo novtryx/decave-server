@@ -29,6 +29,7 @@ const ActivitySchema = new Schema<IActivity>(
           "user_login",
           "payment_received",
           "payment_failed",
+          "feedback_request_sent",
           "other"
         ],
         message: "{VALUE} is not a valid activity type",

@@ -11,12 +11,56 @@ interface TicketSalesDetail {
   currency: string;
 }
 
+interface TopEventByRevenue {
+  eventId: string;
+  eventTitle: string;
+  revenue: number;
+  ticketsSold: number;
+}
+
+interface CheckInStats {
+  totalSold: number;
+  totalCheckedIn: number;
+  checkInRate: number; // percentage, 0-100
+  eventsConsidered: number; // events whose endDate has passed
+}
+
+interface PaymentHealthStats {
+  totalCompleted: number;
+  totalPending: number;
+  totalFailed: number;
+  completionRate: number; // percentage of completed among all transactions
+}
+
+interface InfluencerStats {
+  influencerRevenue: number;
+  influencerTickets: number;
+  organicRevenue: number;
+  organicTickets: number;
+  influencerRevenueSharePercent: number; // % of total revenue attributed to influencers
+}
+
+interface TicketSaleWindowStats {
+  onSale: number; // currently purchasable
+  notYetOpen: number; // saleStartDate is in the future
+  closed: number; // saleEndDate has passed
+  noWindowSet: number; // no sale window configured (always open)
+}
+
 interface AnalyticsResult {
   totalRevenue?: number;
   totalTickets?: number;
   totalEvents?: number;
   totalPublishedEvents?: number;
+  totalCompletedTransactions?: number;
+  avgOrderValue?: number;
+  avgTicketsPerOrder?: number;
   ticketSalesDetails?: TicketSalesDetail[];
+  topEventsByRevenue?: TopEventByRevenue[];
+  checkInStats?: CheckInStats;
+  paymentHealth?: PaymentHealthStats;
+  influencerStats?: InfluencerStats;
+  ticketSaleWindowStats?: TicketSaleWindowStats;
   monthRevenue?: Record<string, number>;
   monthTickets?: Record<string, number>;
   yearRevenue?: Record<number, number>;
@@ -152,12 +196,50 @@ export class AnalyticsService {
       published: true,
     });
 
+    // Roll ticket-tier-level sales up to event-level, ranked by
+    // revenue (not just ticket count) — a premium event with fewer,
+    // pricier tickets can easily outearn a high-volume cheap one, so
+    // ranking by tickets sold alone is misleading.
+    const eventTotals = new Map<string, TopEventByRevenue>();
+    for (const item of ticketSalesDetails) {
+      const existing = eventTotals.get(item.eventId);
+      if (existing) {
+        existing.revenue += item.revenue;
+        existing.ticketsSold += item.ticketsSold;
+      } else {
+        eventTotals.set(item.eventId, {
+          eventId: item.eventId,
+          eventTitle: item.eventTitle,
+          revenue: item.revenue,
+          ticketsSold: item.ticketsSold,
+        });
+      }
+    }
+    const topEventsByRevenue = Array.from(eventTotals.values())
+      .sort((a, b) => b.revenue - a.revenue)
+      .slice(0, 10);
+
+    // Average order value / tickets per order — needs the count of
+    // completed transactions (not ticket-tier rows, which can be
+    // multiple per transaction).
+    const totalCompletedTransactions = await this.transactionModel.countDocuments({
+      status: "completed",
+    });
+    const avgOrderValue =
+      totalCompletedTransactions > 0 ? totalRevenue / totalCompletedTransactions : 0;
+    const avgTicketsPerOrder =
+      totalCompletedTransactions > 0 ? totalTickets / totalCompletedTransactions : 0;
+
     return {
       totalEvents,
       totalTickets,
       totalRevenue,
       totalPublishedEvents,
+      totalCompletedTransactions,
+      avgOrderValue: Number(avgOrderValue.toFixed(2)),
+      avgTicketsPerOrder: Number(avgTicketsPerOrder.toFixed(2)),
       ticketSalesDetails,
+      topEventsByRevenue,
     };
   }
 
@@ -459,6 +541,221 @@ export class AnalyticsService {
     };
   }
 
+  // ==================== CHECK-IN RATE ====================
+  /**
+   * What fraction of sold tickets were actually used. Only counts
+   * events that have already ended — an event still upcoming will
+   * always show 0% checked in, which isn't a meaningful "no-show"
+   * signal yet.
+   */
+  public async getCheckInStats(): Promise<AnalyticsResult> {
+    await this.ensureConnection();
+
+    const now = new Date();
+
+    const pastEventIds = await this.eventModel
+      .find({ "eventDetails.endDate": { $lt: now } })
+      .distinct("_id");
+
+    if (pastEventIds.length === 0) {
+      return {
+        checkInStats: {
+          totalSold: 0,
+          totalCheckedIn: 0,
+          checkInRate: 0,
+          eventsConsidered: 0,
+        },
+      };
+    }
+
+    const [result] = await this.transactionModel.aggregate([
+      {
+        $match: {
+          status: "completed",
+          event: { $in: pastEventIds },
+        },
+      },
+      { $unwind: "$buyers" },
+      {
+        $group: {
+          _id: null,
+          totalSold: { $sum: 1 },
+          totalCheckedIn: {
+            $sum: { $cond: [{ $eq: ["$buyers.checkedIn", true] }, 1, 0] },
+          },
+        },
+      },
+    ]);
+
+    const totalSold = result?.totalSold || 0;
+    const totalCheckedIn = result?.totalCheckedIn || 0;
+    const checkInRate = totalSold > 0 ? (totalCheckedIn / totalSold) * 100 : 0;
+
+    return {
+      checkInStats: {
+        totalSold,
+        totalCheckedIn,
+        checkInRate: Number(checkInRate.toFixed(2)),
+        eventsConsidered: pastEventIds.length,
+      },
+    };
+  }
+
+  // ==================== PAYMENT HEALTH ====================
+  /**
+   * Completed vs pending vs failed, across all transactions ever
+   * created — an early-warning signal for checkout/payment-provider
+   * issues independent of any single event's performance.
+   */
+  public async getPaymentHealthStats(): Promise<AnalyticsResult> {
+    await this.ensureConnection();
+
+    const results = await this.transactionModel.aggregate([
+      {
+        $group: {
+          _id: "$status",
+          count: { $sum: 1 },
+        },
+      },
+    ]);
+
+    const counts: Record<string, number> = { completed: 0, pending: 0, failed: 0 };
+    results.forEach((r: any) => {
+      if (r._id in counts) counts[r._id] = r.count;
+    });
+
+    const total = counts.completed + counts.pending + counts.failed;
+    const completionRate = total > 0 ? (counts.completed / total) * 100 : 0;
+
+    return {
+      paymentHealth: {
+        totalCompleted: counts.completed,
+        totalPending: counts.pending,
+        totalFailed: counts.failed,
+        completionRate: Number(completionRate.toFixed(2)),
+      },
+    };
+  }
+
+  // ==================== INFLUENCER ATTRIBUTION ====================
+  /**
+   * How much of total revenue/tickets came through an influencer
+   * referral code vs. organic (direct) purchases.
+   */
+  public async getInfluencerStats(): Promise<AnalyticsResult> {
+    await this.ensureConnection();
+
+    const results = await this.transactionModel.aggregate([
+      { $match: { status: "completed" } },
+      {
+        $lookup: {
+          from: "events",
+          localField: "event",
+          foreignField: "_id",
+          as: "eventData",
+        },
+      },
+      { $unwind: "$eventData" },
+      {
+        $addFields: {
+          ticketInfo: {
+            $first: {
+              $filter: {
+                input: "$eventData.tickets",
+                as: "t",
+                cond: { $eq: ["$$t._id", "$ticket"] },
+              },
+            },
+          },
+          quantity: { $size: "$buyers" },
+        },
+      },
+      {
+        $group: {
+          _id: { $cond: [{ $ne: ["$influencer", null] }, "influencer", "organic"] },
+          revenue: { $sum: { $multiply: ["$quantity", "$ticketInfo.price"] } },
+          tickets: { $sum: "$quantity" },
+        },
+      },
+    ]);
+
+    let influencerRevenue = 0;
+    let influencerTickets = 0;
+    let organicRevenue = 0;
+    let organicTickets = 0;
+
+    results.forEach((r: any) => {
+      if (r._id === "influencer") {
+        influencerRevenue = r.revenue;
+        influencerTickets = r.tickets;
+      } else {
+        organicRevenue = r.revenue;
+        organicTickets = r.tickets;
+      }
+    });
+
+    const totalRevenue = influencerRevenue + organicRevenue;
+    const influencerRevenueSharePercent =
+      totalRevenue > 0 ? (influencerRevenue / totalRevenue) * 100 : 0;
+
+    return {
+      influencerStats: {
+        influencerRevenue,
+        influencerTickets,
+        organicRevenue,
+        organicTickets,
+        influencerRevenueSharePercent: Number(influencerRevenueSharePercent.toFixed(2)),
+      },
+    };
+  }
+
+  // ==================== TICKET SALE WINDOW STATUS ====================
+  /**
+   * How many ticket tiers (across all published events) are
+   * currently on sale, not yet open, or already closed — only
+   * meaningful now that tickets can have a sale window at all.
+   */
+  public async getTicketSaleWindowStats(): Promise<AnalyticsResult> {
+    await this.ensureConnection();
+
+    const now = new Date();
+
+    const events = await this.eventModel
+      .find({ published: true })
+      .select("tickets")
+      .lean();
+
+    const stats: TicketSaleWindowStats = {
+      onSale: 0,
+      notYetOpen: 0,
+      closed: 0,
+      noWindowSet: 0,
+    };
+
+    for (const event of events) {
+      for (const ticket of event.tickets || []) {
+        const start = (ticket as any).saleStartDate
+          ? new Date((ticket as any).saleStartDate)
+          : null;
+        const end = (ticket as any).saleEndDate
+          ? new Date((ticket as any).saleEndDate)
+          : null;
+
+        if (!start && !end) {
+          stats.noWindowSet++;
+        } else if (start && now < start) {
+          stats.notYetOpen++;
+        } else if (end && now > end) {
+          stats.closed++;
+        } else {
+          stats.onSale++;
+        }
+      }
+    }
+
+    return { ticketSaleWindowStats: stats };
+  }
+
   // ==================== COMBINED ANALYTICS ====================
   /**
    * Get all analytics data in a single call
@@ -466,19 +763,35 @@ export class AnalyticsService {
   public async getAllAnalytics(years: number = 7): Promise<AnalyticsResult> {
     await this.ensureConnection();
 
-    const [eventStats, monthlyData, yearlyData, conversionData] =
-      await Promise.all([
-        this.getEventTicketStats(),
-        this.getMonthlyRevenueAndTickets(),
-        this.getYearlyRevenueAndTickets(years),
-        this.getConversionRates(),
-      ]);
+    const [
+      eventStats,
+      monthlyData,
+      yearlyData,
+      conversionData,
+      checkInData,
+      paymentHealthData,
+      influencerData,
+      ticketSaleWindowData,
+    ] = await Promise.all([
+      this.getEventTicketStats(),
+      this.getMonthlyRevenueAndTickets(),
+      this.getYearlyRevenueAndTickets(years),
+      this.getConversionRates(),
+      this.getCheckInStats(),
+      this.getPaymentHealthStats(),
+      this.getInfluencerStats(),
+      this.getTicketSaleWindowStats(),
+    ]);
 
     return {
       ...eventStats,
       ...monthlyData,
       ...yearlyData,
       ...conversionData,
+      ...checkInData,
+      ...paymentHealthData,
+      ...influencerData,
+      ...ticketSaleWindowData,
     };
   }
 }
