@@ -1,5 +1,6 @@
 import mongoose, { Schema } from "mongoose";
 import { IEvent } from "../types/database.types";
+import { TICKET_TIER_CATEGORIES, DEFAULT_TICKET_TIER_CATEGORY } from "../constants/ticketTiers";
 
 const BrandColorSchema = new Schema(
   {
@@ -57,6 +58,14 @@ const TicketSchema = new Schema(
     // this is fully backward compatible with pre-existing tickets.
     saleStartDate: { type: Date, required: false, default: null },
     saleEndDate: { type: Date, required: false, default: null },
+    // Ticket tier category for pricing intelligence (Early Access, VIP,
+    // Gate, etc). Defaults to "standard" so pre-existing tickets created
+    // before this field existed remain valid without a migration.
+    tierCategory: {
+      type: String,
+      enum: TICKET_TIER_CATEGORIES,
+      default: DEFAULT_TICKET_TIER_CATEGORY,
+    },
   },
   { _id: true }
 );

@@ -1,5 +1,6 @@
 import Joi from "joi";
 import { Request, Response, NextFunction } from "express";
+import { TICKET_TIER_CATEGORIES } from "../constants/ticketTiers";
 
 // Reusable Mongo ObjectId pattern (24 hex chars)
 const objectId = Joi.string().pattern(/^[0-9a-fA-F]{24}$/).messages({
@@ -82,6 +83,7 @@ const ticketSchema = Joi.object({
   benefits: Joi.array().items(Joi.string()).optional(),
   saleStartDate: Joi.date().iso().allow(null).optional(),
   saleEndDate: Joi.date().iso().allow(null).optional(),
+  tierCategory: Joi.string().valid(...TICKET_TIER_CATEGORIES).optional(),
 })
   .custom((value, helpers) => {
     if (value.availableQuantity > value.initialQuantity) {
@@ -115,6 +117,7 @@ export const createTicketSchema = Joi.object({
   benefits: Joi.array().items(Joi.string()).optional(),
   saleStartDate: Joi.date().iso().allow(null).optional(),
   saleEndDate: Joi.date().iso().allow(null).optional(),
+  tierCategory: Joi.string().valid(...TICKET_TIER_CATEGORIES).optional(),
 }).custom((value, helpers) => {
   if (value.saleStartDate && value.saleEndDate && value.saleEndDate <= value.saleStartDate) {
     return helpers.message({
@@ -139,6 +142,7 @@ export const updateTicketSchema = Joi.object({
   benefits: Joi.array().items(Joi.string()).optional(),
   saleStartDate: Joi.date().iso().allow(null).optional(),
   saleEndDate: Joi.date().iso().allow(null).optional(),
+  tierCategory: Joi.string().valid(...TICKET_TIER_CATEGORIES).optional(),
 })
   .min(1)
   .messages({ "object.min": "At least one field must be provided to update" })

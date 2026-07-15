@@ -72,6 +72,7 @@ export interface IEvent extends Document {
         benefits:string[];
         saleStartDate?: Date | null;
         saleEndDate?: Date | null;
+        tierCategory?: string;
         _id:mongoose.Types.ObjectId
 
   }[];
@@ -149,8 +150,18 @@ export interface IBuyer extends Document {
   phoneNumber: string;
   ticketId: string;
   checkedIn: boolean;
+  checkedInAt?: Date | null;
+  checkedInBy?: mongoose.Types.ObjectId | null;
   qrCode: string;
 }
+
+export type TransactionStatus =
+  | "pending"
+  | "failed"
+  | "completed"
+  | "refunded"
+  | "cancelled"
+  | "manually_verified";
 
 export interface ITransactionHistory extends Document{
   txnId: string;
@@ -158,8 +169,36 @@ export interface ITransactionHistory extends Document{
   event: mongoose.Types.ObjectId;
   ticket: mongoose.Types.ObjectId;
   buyers: IBuyer[];
-  status: "pending"| "failed"| "completed";
-   createdAt?: Date;
+  status: TransactionStatus;
+  createdAt?: Date;
   updatedAt?: Date;
-  influencer: any
+  influencer: any;
+  // Payment channel the buyer paid through (card, bank_transfer, ussd,
+  // manual, etc). Populated from Paystack's webhook payload where
+  // available, or set explicitly on manual verification.
+  paymentChannel?: string | null;
+  // Where the buyer came from — "influencer" is inferred from the
+  // influencer field already; this captures organic sources like
+  // instagram / whatsapp / direct / email / other.
+  referralSource?: string | null;
+  // Set once, the first time a pending transaction is flagged as
+  // abandoned (still pending past the abandonment threshold). Lets the
+  // recovery job avoid re-flagging/re-notifying the same transaction.
+  abandonedAt?: Date | null;
+  manualVerification?: {
+    verifiedBy: mongoose.Types.ObjectId;
+    verifiedAt: Date;
+    note?: string;
+  } | null;
+  refund?: {
+    amount: number;
+    reason?: string;
+    refundedBy: mongoose.Types.ObjectId;
+    refundedAt: Date;
+  } | null;
+  cancellation?: {
+    reason?: string;
+    cancelledBy: mongoose.Types.ObjectId;
+    cancelledAt: Date;
+  } | null;
 }

@@ -723,6 +723,231 @@ export class AnalyticsService {
     return { ticketSaleWindowStats: stats };
   }
 
+  // ==================== EVENT-LEVEL ANALYTICS ====================
+  /**
+   * Dedicated analytics for a single event: ticket tier breakdown
+   * (revenue, velocity, sale-window status, unsold-inventory flag),
+   * daily sales trend, peak sale day, and no-show rate. This is the
+   * drill-down the all-time/range analytics above can't give you.
+   */
+  public async getEventAnalytics(eventId: string): Promise<any> {
+    await this.ensureConnection();
+
+    if (!mongoose.Types.ObjectId.isValid(eventId)) {
+      const err: any = new Error("Invalid event id");
+      err.statusCode = 400;
+      throw err;
+    }
+
+    const eventObjectId = new mongoose.Types.ObjectId(eventId);
+    const event = await this.eventModel.findById(eventObjectId).lean<any>();
+
+    if (!event) {
+      const err: any = new Error("Event not found");
+      err.statusCode = 404;
+      throw err;
+    }
+
+    const now = new Date();
+    // Manually-verified bank transfers count as real sales, same as
+    // completed Paystack transactions — both move real money.
+    const REVENUE_STATUSES = ["completed", "manually_verified"];
+
+    // Per-ticket, per-status buyer counts for this event in one pass.
+    const perTicket = await this.transactionModel.aggregate([
+      { $match: { event: eventObjectId } },
+      {
+        $group: {
+          _id: { ticket: "$ticket", status: "$status" },
+          buyersCount: { $sum: { $size: "$buyers" } },
+          checkedInCount: {
+            $sum: {
+              $size: {
+                $filter: { input: "$buyers", as: "b", cond: { $eq: ["$$b.checkedIn", true] } },
+              },
+            },
+          },
+        },
+      },
+    ]);
+
+    const ticketAgg = new Map<
+      string,
+      { sold: number; checkedIn: number; pending: number; refunded: number; cancelled: number }
+    >();
+    for (const row of perTicket) {
+      const ticketId = row._id.ticket?.toString();
+      if (!ticketId) continue;
+      const bucket =
+        ticketAgg.get(ticketId) || { sold: 0, checkedIn: 0, pending: 0, refunded: 0, cancelled: 0 };
+
+      if (REVENUE_STATUSES.includes(row._id.status)) {
+        bucket.sold += row.buyersCount;
+        bucket.checkedIn += row.checkedInCount;
+      } else if (row._id.status === "pending") {
+        bucket.pending += row.buyersCount;
+      } else if (row._id.status === "refunded") {
+        bucket.refunded += row.buyersCount;
+      } else if (row._id.status === "cancelled") {
+        bucket.cancelled += row.buyersCount;
+      }
+      ticketAgg.set(ticketId, bucket);
+    }
+
+    const tierBreakdown = (event.tickets || []).map((ticket: any) => {
+      const agg =
+        ticketAgg.get(ticket._id.toString()) ||
+        { sold: 0, checkedIn: 0, pending: 0, refunded: 0, cancelled: 0 };
+      const revenue = agg.sold * ticket.price;
+      const soldPercent = ticket.initialQuantity > 0 ? (agg.sold / ticket.initialQuantity) * 100 : 0;
+
+      const start = ticket.saleStartDate ? new Date(ticket.saleStartDate) : null;
+      const end = ticket.saleEndDate ? new Date(ticket.saleEndDate) : null;
+      let saleWindowStatus: "on_sale" | "not_yet_open" | "closed" | "no_window_set";
+      if (!start && !end) saleWindowStatus = "no_window_set";
+      else if (start && now < start) saleWindowStatus = "not_yet_open";
+      else if (end && now > end) saleWindowStatus = "closed";
+      else saleWindowStatus = "on_sale";
+
+      // Sell-through velocity: tickets sold per day since the sale
+      // window opened (or since the event was created, if no window
+      // was ever set).
+      const windowOpenedAt = start || event.createdAt || now;
+      const daysActive = Math.max(1, (now.getTime() - new Date(windowOpenedAt).getTime()) / 86400000);
+      const salesVelocityPerDay = Number((agg.sold / daysActive).toFixed(2));
+
+      return {
+        ticketId: ticket._id.toString(),
+        ticketName: ticket.ticketName,
+        tierCategory: ticket.tierCategory || "standard",
+        price: ticket.price,
+        currency: ticket.currency,
+        initialQuantity: ticket.initialQuantity,
+        availableQuantity: ticket.availableQuantity,
+        ticketsSold: agg.sold,
+        revenue,
+        soldPercent: Number(soldPercent.toFixed(1)),
+        checkedIn: agg.checkedIn,
+        pending: agg.pending,
+        refunded: agg.refunded,
+        cancelled: agg.cancelled,
+        saleWindowStatus,
+        salesVelocityPerDay,
+      };
+    });
+
+    // Flag unsold inventory and recommend opening the next phase.
+    // Heuristic: a tier counts as unsold inventory once its window has
+    // closed (or the event has already started) while under 70% of it
+    // has sold. "Next phase" is the following tier in array order if
+    // it hasn't opened yet and this tier is fully sold out.
+    const eventHasStarted = event.eventDetails?.startDate
+      ? now >= new Date(event.eventDetails.startDate)
+      : false;
+
+    tierBreakdown.forEach((tier: any, index: number) => {
+      tier.unsoldInventoryFlag =
+        (tier.saleWindowStatus === "closed" || eventHasStarted) &&
+        tier.soldPercent < 70 &&
+        tier.availableQuantity > 0;
+
+      if (tier.availableQuantity === 0) {
+        const next = tierBreakdown[index + 1];
+        tier.recommendNextPhase =
+          next && next.saleWindowStatus === "not_yet_open" ? next.ticketName : null;
+      } else {
+        tier.recommendNextPhase = null;
+      }
+    });
+
+    // Daily sales trend, revenue-status transactions only.
+    const dailyTrend = await this.transactionModel.aggregate([
+      { $match: { event: eventObjectId, status: { $in: REVENUE_STATUSES } } },
+      {
+        $lookup: {
+          from: "events",
+          localField: "event",
+          foreignField: "_id",
+          as: "eventData",
+        },
+      },
+      { $unwind: "$eventData" },
+      {
+        $addFields: {
+          ticketInfo: {
+            $first: {
+              $filter: { input: "$eventData.tickets", as: "t", cond: { $eq: ["$$t._id", "$ticket"] } },
+            },
+          },
+        },
+      },
+      {
+        $group: {
+          _id: { $dateToString: { format: "%Y-%m-%d", date: "$createdAt" } },
+          ticketsSold: { $sum: { $size: "$buyers" } },
+          revenue: { $sum: { $multiply: [{ $size: "$buyers" }, "$ticketInfo.price"] } },
+        },
+      },
+      { $sort: { _id: 1 } },
+    ]);
+
+    const dailySalesTrend = dailyTrend.map((d: any) => ({
+      date: d._id,
+      ticketsSold: d.ticketsSold,
+      revenue: d.revenue,
+    }));
+
+    const peakSaleDay = dailySalesTrend.reduce(
+      (peak: any, point: any) => (!peak || point.revenue > peak.revenue ? point : peak),
+      null
+    );
+
+    const totalTicketsSold = tierBreakdown.reduce((sum: number, t: any) => sum + t.ticketsSold, 0);
+    const totalRevenue = tierBreakdown.reduce((sum: number, t: any) => sum + t.revenue, 0);
+    const totalCheckedIn = tierBreakdown.reduce((sum: number, t: any) => sum + t.checkedIn, 0);
+    const noShowCount = Math.max(0, totalTicketsSold - totalCheckedIn);
+    const noShowRate =
+      totalTicketsSold > 0 ? Number(((noShowCount / totalTicketsSold) * 100).toFixed(1)) : 0;
+    const checkInRate =
+      totalTicketsSold > 0 ? Number(((totalCheckedIn / totalTicketsSold) * 100).toFixed(1)) : 0;
+
+    return {
+      eventId,
+      eventTitle: event.eventDetails?.eventTitle,
+      eventBanner: event.eventDetails?.eventBanner,
+      published: event.published,
+      startDate: event.eventDetails?.startDate,
+      endDate: event.eventDetails?.endDate,
+      totalTicketsCreated: (event.tickets || []).reduce((s: number, t: any) => s + t.initialQuantity, 0),
+      totalTicketsSold,
+      totalTicketsRemaining: (event.tickets || []).reduce((s: number, t: any) => s + t.availableQuantity, 0),
+      totalRevenue,
+      tierBreakdown,
+      dailySalesTrend,
+      peakSaleDay,
+      noShowRate,
+      checkInRate,
+      totalCheckedIn,
+    };
+  }
+
+  /**
+   * Side-by-side comparison for multiple events — e.g. Loud Room one
+   * vs Loud Room two vs AfroSpook. Silently skips ids that are
+   * invalid or no longer exist rather than failing the whole batch.
+   */
+  public async compareEvents(eventIds: string[]): Promise<any[]> {
+    const results: any[] = [];
+    for (const id of eventIds) {
+      try {
+        results.push(await this.getEventAnalytics(id));
+      } catch (err) {
+        continue;
+      }
+    }
+    return results;
+  }
+
   // ==================== COMBINED ANALYTICS ====================
   /**
    * Get all analytics data in a single call, scoped to the given

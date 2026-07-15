@@ -702,6 +702,118 @@ export class TransactionService {
 
     return results;
   }
+
+  /**
+   * ===============================
+   * PENDING PAYMENT AGING
+   * ===============================
+   * Buckets currently-pending transactions by how long they've been
+   * sitting unpaid: 0-5m (still likely mid-checkout), 5m-1h, 1h-6h,
+   * 6h-24h, and 24h+ ("expired" — safe to treat as abandoned).
+   */
+  async getPendingAging() {
+    const now = Date.now();
+    const MIN = 60 * 1000;
+    const HOUR = 60 * MIN;
+
+    const boundaries = [
+      { key: "under5Min", from: 0, to: 5 * MIN },
+      { key: "fiveMinTo1Hour", from: 5 * MIN, to: 1 * HOUR },
+      { key: "oneHourTo6Hours", from: 1 * HOUR, to: 6 * HOUR },
+      { key: "sixHoursTo24Hours", from: 6 * HOUR, to: 24 * HOUR },
+      { key: "expired", from: 24 * HOUR, to: Infinity },
+    ];
+
+    const pending = await transactionHistoryModel
+      .find({ status: "pending" })
+      .select("txnId event ticket buyers createdAt")
+      .populate("event", "eventDetails.eventTitle")
+      .sort({ createdAt: 1 })
+      .lean();
+
+    const buckets: Record<string, { count: number; transactions: any[] }> = {};
+    boundaries.forEach((b) => (buckets[b.key] = { count: 0, transactions: [] }));
+
+    for (const txn of pending) {
+      const ageMs = now - new Date((txn as any).createdAt).getTime();
+      const bucket = boundaries.find((b) => ageMs >= b.from && ageMs < b.to) || boundaries[boundaries.length - 1];
+
+      buckets[bucket.key].count += 1;
+      buckets[bucket.key].transactions.push({
+        txnId: (txn as any).txnId,
+        eventId: (txn as any).event?._id,
+        eventTitle: (txn as any).event?.eventDetails?.eventTitle,
+        buyerEmail: (txn as any).buyers?.[0]?.email,
+        buyerName: (txn as any).buyers?.[0]?.fullName,
+        quantity: (txn as any).buyers?.length || 0,
+        createdAt: (txn as any).createdAt,
+        ageMinutes: Math.round(ageMs / MIN),
+      });
+    }
+
+    return {
+      totalPending: pending.length,
+      buckets,
+    };
+  }
+
+  /**
+   * ===============================
+   * ABANDONED CHECKOUT RECOVERY
+   * ===============================
+   * "Abandoned" = still pending past the given threshold (default
+   * 30 minutes — long enough that a normal Paystack checkout would
+   * have resolved). Returns buyer contact details so a recovery
+   * message (email/WhatsApp, wired up in Phase 3) can be sent.
+   */
+  async getAbandonedCheckouts(page: number = 1, limit: number = 20, thresholdMinutes: number = 30) {
+    const cutoff = new Date(Date.now() - thresholdMinutes * 60 * 1000);
+    const skip = (page - 1) * limit;
+
+    const match = { status: "pending", createdAt: { $lte: cutoff } };
+
+    const [transactions, total] = await Promise.all([
+      transactionHistoryModel
+        .find(match)
+        .select("txnId event ticket buyers createdAt abandonedAt")
+        .populate("event", "eventDetails.eventTitle eventDetails.eventBanner")
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+      transactionHistoryModel.countDocuments(match),
+    ]);
+
+    // Best-effort flag: mark first-seen abandoned transactions so a
+    // future recovery job can tell "already nudged" from "not yet".
+    const idsToFlag = transactions.filter((t: any) => !t.abandonedAt).map((t: any) => t._id);
+    if (idsToFlag.length > 0) {
+      await transactionHistoryModel.updateMany(
+        { _id: { $in: idsToFlag } },
+        { $set: { abandonedAt: new Date() } }
+      );
+    }
+
+    return {
+      data: transactions.map((t: any) => ({
+        txnId: t.txnId,
+        eventId: t.event?._id,
+        eventTitle: t.event?.eventDetails?.eventTitle,
+        buyers: t.buyers?.map((b: any) => ({ fullName: b.fullName, email: b.email, phoneNumber: b.phoneNumber })),
+        quantity: t.buyers?.length || 0,
+        createdAt: t.createdAt,
+        ageMinutes: Math.round((Date.now() - new Date(t.createdAt).getTime()) / 60000),
+      })),
+      pagination: {
+        total,
+        page,
+        limit,
+        pages: Math.ceil(total / limit),
+        hasNext: page * limit < total,
+        hasPrev: page > 1,
+      },
+    };
+  }
 }
 
 export default new TransactionService();

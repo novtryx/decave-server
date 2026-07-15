@@ -30,6 +30,11 @@ const BuyerSchema = new Schema<IBuyer>(
       type: Boolean,
       default: false,
     },
+    // Who checked this buyer in and when — powers the duplicate-scan
+    // warning ("already checked in by X at Y") and door-metrics'
+    // peak entry time. Both null until the first successful check-in.
+    checkedInAt: { type: Date, default: null },
+    checkedInBy: { type: Schema.Types.ObjectId, ref: "admin", default: null },
     qrCode: {
       type: String,
     },
@@ -78,11 +83,48 @@ const TransactionHistorySchema = new Schema<ITransactionHistory>(
    
     status: {
       type: String,
-      enum: ["pending", "failed", "completed"],
+      enum: ["pending", "failed", "completed", "refunded", "cancelled", "manually_verified"],
       default: "pending",
       index: true,
     },
-    
+    paymentChannel: { type: String, default: null, trim: true },
+    referralSource: { type: String, default: null, trim: true },
+    abandonedAt: { type: Date, default: null },
+    manualVerification: {
+      type: new Schema(
+        {
+          verifiedBy: { type: Schema.Types.ObjectId, ref: "admin", required: true },
+          verifiedAt: { type: Date, required: true, default: Date.now },
+          note: { type: String, trim: true },
+        },
+        { _id: false }
+      ),
+      default: null,
+    },
+    refund: {
+      type: new Schema(
+        {
+          amount: { type: Number, required: true, min: 0 },
+          reason: { type: String, trim: true },
+          refundedBy: { type: Schema.Types.ObjectId, ref: "admin", required: true },
+          refundedAt: { type: Date, required: true, default: Date.now },
+        },
+        { _id: false }
+      ),
+      default: null,
+    },
+    cancellation: {
+      type: new Schema(
+        {
+          reason: { type: String, trim: true },
+          cancelledBy: { type: Schema.Types.ObjectId, ref: "admin", required: true },
+          cancelledAt: { type: Date, required: true, default: Date.now },
+        },
+        { _id: false }
+      ),
+      default: null,
+    },
+
   },
   {
     timestamps: true,
