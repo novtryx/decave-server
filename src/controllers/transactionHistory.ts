@@ -175,14 +175,13 @@ export const manuallyVerifyTransaction = async (req: AuthRequest, res: Response)
         await event.save();
         await transactionService.invalidateDashboardCache();
 
-        // Influencer commission, same as the webhook path
+        // Influencer commission — always applies now, calculated off the
+        // canonical (undiscounted) ticket price, same as the webhook path
         if (transaction.influencer) {
             const influencer = await InfluencerModel.findById(transaction.influencer.toString());
             if (influencer) {
-                const paidAmount = transaction.buyers.length * ticket.price;
-                const commission = influencer.influencersTakesPercentage
-                    ? (INFLUENCER_PERCENTAGE / 100) * paidAmount
-                    : 0;
+                const baseAmount = transaction.buyers.length * ticket.price;
+                const commission = (INFLUENCER_PERCENTAGE / 100) * baseAmount;
                 await InfluencerModel.findByIdAndUpdate(transaction.influencer, {
                     $inc: { amount: commission, buyers: transaction.buyers.length },
                 });

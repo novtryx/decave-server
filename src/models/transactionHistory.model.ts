@@ -88,6 +88,7 @@ const TransactionHistorySchema = new Schema<ITransactionHistory>(
       index: true,
     },
     paymentChannel: { type: String, default: null, trim: true },
+    originalAmount: { type: Number, default: null },
     referralSource: { type: String, default: null, trim: true },
     abandonedAt: { type: Date, default: null },
     manualVerification: {
@@ -119,6 +120,35 @@ const TransactionHistorySchema = new Schema<ITransactionHistory>(
           reason: { type: String, trim: true },
           cancelledBy: { type: Schema.Types.ObjectId, ref: "admin", required: true },
           cancelledAt: { type: Date, required: true, default: Date.now },
+        },
+        { _id: false }
+      ),
+      default: null,
+    },
+
+    // Optional cocktail/drink add-on order for this checkout. Belongs
+    // to the primary buyer, not per-attendee.
+    cocktailOrder: {
+      type: new Schema(
+        {
+          items: {
+            type: [
+              new Schema(
+                {
+                  cocktail: { type: Schema.Types.ObjectId, required: true },
+                  name: { type: String, required: true, trim: true },
+                  unitPrice: { type: Number, required: true, min: 0 },
+                  discountedUnitPrice: { type: Number, required: true, min: 0 },
+                  quantity: { type: Number, required: true, min: 1 },
+                  redeemedQuantity: { type: Number, required: true, default: 0, min: 0 },
+                },
+                { _id: false }
+              ),
+            ],
+            default: [],
+          },
+          totalAmount: { type: Number, required: true, min: 0 },
+          qrCode: { type: String, default: "" },
         },
         { _id: false }
       ),

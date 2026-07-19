@@ -70,6 +70,22 @@ const TicketSchema = new Schema(
   { _id: true }
 );
 
+// Per-event cocktail/drink add-on menu, offered at checkout alongside
+// tickets. The 20% discount is a fixed platform-wide policy applied
+// at checkout time (not stored per-cocktail) — `price` here is always
+// the full, undiscounted menu price.
+const CocktailSchema = new Schema(
+  {
+    name: { type: String, required: true, trim: true },
+    description: { type: String, trim: true, default: "" },
+    price: { type: Number, required: true, min: 0 },
+    currency: { type: String, required: true, uppercase: true, default: "NGN" },
+    initialQuantity: { type: Number, required: true, min: 0 },
+    availableQuantity: { type: Number, required: true, min: 0 },
+  },
+  { _id: true }
+);
+
 const SocialsSchema = new Schema(
   {
     instagram: { type: String, trim: true, default: "" },
@@ -137,6 +153,10 @@ const EventSchema = new Schema<IEvent>(
     tickets: { 
       type: [TicketSchema], 
       default: [] 
+    },
+    cocktails: {
+      type: [CocktailSchema],
+      default: [],
     },
     artistLineUp: { 
       type: [ArtistLineUpSchema], 

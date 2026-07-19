@@ -99,6 +99,23 @@ const ticketSchema = Joi.object({
     return value;
   });
 
+const cocktailSchema = Joi.object({
+  _id: objectId.optional(),
+  name: Joi.string().trim().required(),
+  description: Joi.string().trim().allow("").optional(),
+  price: Joi.number().min(0).required(),
+  currency: Joi.string().uppercase().default("NGN"),
+  initialQuantity: Joi.number().integer().min(0).required(),
+  availableQuantity: Joi.number().integer().min(0).required(),
+}).custom((value, helpers) => {
+  if (value.availableQuantity > value.initialQuantity) {
+    return helpers.message({
+      custom: '"availableQuantity" cannot exceed "initialQuantity"',
+    });
+  }
+  return value;
+});
+
 // Create Single Ticket Schema (POST /create-ticket/:eventId)
 // availableQuantity is intentionally not accepted here — it always
 // starts equal to initialQuantity, set server-side.
@@ -155,6 +172,37 @@ export const updateTicketSchema = Joi.object({
     return value;
   });
 
+// Cocktail add-on menu schemas. Mirrors the ticket create/update
+// pattern: price is immutable after creation for the same reason —
+// cocktails may already be sold at the original price.
+export const createCocktailSchema = Joi.object({
+  name: Joi.string().trim().required().messages({
+    "string.empty": "Cocktail name is required",
+  }),
+  description: Joi.string().trim().allow("").optional(),
+  price: Joi.number().min(0).required().messages({
+    "any.required": "Price is required",
+  }),
+  currency: Joi.string().uppercase().default("NGN"),
+  initialQuantity: Joi.number().integer().min(1).required().messages({
+    "number.min": "Initial quantity must be at least 1",
+    "any.required": "Initial quantity is required",
+  }),
+});
+
+export const updateCocktailSchema = Joi.object({
+  name: Joi.string().trim().optional(),
+  description: Joi.string().trim().allow("").optional(),
+  price: Joi.any().forbidden().messages({
+    "any.unknown": "Cocktail price cannot be changed after creation",
+  }),
+  currency: Joi.string().uppercase().optional(),
+  initialQuantity: Joi.number().integer().min(0).optional(),
+  availableQuantity: Joi.number().integer().min(0).optional(),
+})
+  .min(1)
+  .messages({ "object.min": "At least one field must be provided to update" });
+
 // Socials Schema
 const socialsSchema = Joi.object({
   instagram: Joi.string().uri().allow("").optional(),
@@ -203,6 +251,7 @@ export const updateEventSchema = Joi.object({
   eventDetails: eventDetailsSchema.optional(),
   aboutEvent: aboutEventSchema.optional(),
   tickets: Joi.array().items(ticketSchema).optional(),
+  cocktails: Joi.array().items(cocktailSchema).optional(),
   artistLineUp: Joi.array().items(artistLineUpSchema).optional(),
   emergencyContact: emergencyContactSchema.optional(),
    faq: Joi.array().items(faqSchema).optional(),        
@@ -227,6 +276,8 @@ export const updateStage3Schema = Joi.object({
   tickets: Joi.array().items(ticketSchema).min(1).required().messages({
     "array.min": "At least one ticket type is required",
   }),
+  // Cocktails are optional — an event can have zero drink add-ons.
+  cocktails: Joi.array().items(cocktailSchema).optional(),
 });
 
 // Update Stage 4 Schema
@@ -449,6 +500,62 @@ export const validateUpdateTicket = (
   next();
 };
 
+export const validateCreateCocktail = (
+  req: Request,
+  res: Response,
+  next: NextFunction
+): void => {
+  const { error, value } = createCocktailSchema.validate(req.body, {
+    abortEarly: false,
+    stripUnknown: true,
+  });
+
+  if (error) {
+    const errorMessages = error.details.map((detail) => ({
+      field: detail.path.join("."),
+      message: detail.message,
+    }));
+
+    res.status(400).json({
+      success: false,
+      message: "Validation failed",
+      errors: errorMessages,
+    });
+    return;
+  }
+
+  req.body = value;
+  next();
+};
+
+export const validateUpdateCocktail = (
+  req: Request,
+  res: Response,
+  next: NextFunction
+): void => {
+  const { error, value } = updateCocktailSchema.validate(req.body, {
+    abortEarly: false,
+    stripUnknown: true,
+  });
+
+  if (error) {
+    const errorMessages = error.details.map((detail) => ({
+      field: detail.path.join("."),
+      message: detail.message,
+    }));
+
+    res.status(400).json({
+      success: false,
+      message: "Validation failed",
+      errors: errorMessages,
+    });
+    return;
+  }
+
+  req.body = value;
+  next();
+};
+
 export const validateUpdateEvent = (
   req: Request,
   res: Response,
@@ -475,4 +582,4 @@ export const validateUpdateEvent = (
 
   req.body = value;
   next();
-};
+}; 

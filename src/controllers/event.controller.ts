@@ -86,6 +86,91 @@ export const getEventById = async (req: AuthRequest, res: Response): Promise<voi
   }
 };
 
+export const updateEventCocktail = async (
+  req: Request,
+  res: Response
+): Promise<Response> => {
+  try {
+    const { eventId, cocktailId } = req.params;
+    const updateData = req.body;
+    const eventIdStr = Array.isArray(eventId) ? eventId[0] : eventId;
+    const cocktailIdStr = Array.isArray(cocktailId) ? cocktailId[0] : cocktailId;
+
+    if (!eventId || !cocktailId) {
+      return res.status(400).json({
+        success: false,
+        message: "Event ID and Cocktail ID are required",
+      });
+    }
+
+    const result = await eventService.updateEventCocktail(
+      eventIdStr,
+      cocktailIdStr,
+      updateData
+    );
+
+    return res.status(200).json({
+      success: true,
+      message: "Cocktail updated successfully",
+      data: result.event,
+      ...(result.warnings.length > 0 && { warnings: result.warnings }),
+    });
+  } catch (error: any) {
+    const statusCode = error.statusCode || 500;
+    return res.status(statusCode).json({
+      success: false,
+      message: error.message || "Internal server error",
+    });
+  }
+};
+
+export const createEventCocktail = async (
+  req: Request,
+  res: Response
+): Promise<Response> => {
+  try {
+    const { eventId } = req.params;
+    const data = req.body;
+
+    const eventIdStr = Array.isArray(eventId) ? eventId[0] : eventId;
+
+    if (!eventIdStr) {
+      return res.status(400).json({
+        success: false,
+        message: "Event ID is required",
+      });
+    }
+
+    if (!data.name || data.price === undefined || data.initialQuantity === undefined) {
+      return res.status(400).json({
+        success: false,
+        message: "name, price and initialQuantity are required",
+      });
+    }
+
+    const createdEvent = await eventService.createEventCocktail(eventIdStr, data);
+
+    if (!createdEvent) {
+      return res.status(404).json({
+        success: false,
+        message: "Event not found",
+      });
+    }
+
+    return res.status(201).json({
+      success: true,
+      message: "Cocktail created successfully",
+      data: createdEvent,
+    });
+  } catch (error: any) {
+    const statusCode = error.statusCode || 500;
+    return res.status(statusCode).json({
+      success: false,
+      message: error.message || "Internal server error",
+    });
+  }
+};
+
 export const updateEventTicket = async (
   req: Request,
   res: Response

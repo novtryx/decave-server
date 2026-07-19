@@ -16,6 +16,8 @@ import {
   getEventByTitle,
   updateEventTicket,
   createEventTicket,
+  updateEventCocktail,
+  createEventCocktail,
   sendEventFeedbackRequest,
 } from "../controllers/event.controller";
 import {
@@ -24,6 +26,8 @@ import {
   validateEventStage,
   validateCreateTicket,
   validateUpdateTicket,
+  validateCreateCocktail,
+  validateUpdateCocktail,
   validateSendFeedbackRequest,
   parseMultipartEventFields,
 } from "../validators/event.validation";
@@ -68,6 +72,13 @@ router.post(
   createEventTicket
 );
 
+router.post(
+  "/create-cocktail/:eventId",
+  authenticate,
+  validateCreateCocktail,
+  createEventCocktail
+);
+
 
 router.patch(
   "/:id/stage",
@@ -81,6 +92,13 @@ router.patch(
   authenticate,
   validateUpdateTicket,
   updateEventTicket
+);
+
+router.patch(
+  "/:eventId/cocktails/:cocktailId",
+  authenticate,
+  validateUpdateCocktail,
+  updateEventCocktail
 );
 
 

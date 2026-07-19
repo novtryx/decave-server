@@ -77,6 +77,18 @@ export interface IEvent extends Document {
 
   }[];
 
+  // Optional per-event cocktail/drink add-on menu, offered at checkout.
+  // Always undiscounted here — the 20% off is applied at checkout time.
+  cocktails?: {
+        name: string;
+        description?: string;
+        price: number;
+        currency: string;
+        initialQuantity: number;
+        availableQuantity: number;
+        _id: mongoose.Types.ObjectId;
+  }[];
+
   //stage 4
   artistLineUp:{
     artistImage: string;
@@ -177,6 +189,11 @@ export interface ITransactionHistory extends Document{
   // manual, etc). Populated from Paystack's webhook payload where
   // available, or set explicitly on manual verification.
   paymentChannel?: string | null;
+  // The full, undiscounted ticket price for this order — set at
+  // checkout time. Used to calculate an influencer's commission off
+  // the real ticket value even when a referral discount reduced what
+  // the buyer actually paid, so the referral doesn't shrink their cut.
+  originalAmount?: number;
   // Where the buyer came from — "influencer" is inferred from the
   // influencer field already; this captures organic sources like
   // instagram / whatsapp / direct / email / other.
@@ -200,5 +217,22 @@ export interface ITransactionHistory extends Document{
     reason?: string;
     cancelledBy: mongoose.Types.ObjectId;
     cancelledAt: Date;
+  } | null;
+  // Optional cocktail/drink add-on order attached to this checkout.
+  // Belongs to the primary buyer of the order, not per-attendee.
+  // `unitPrice` is the full menu price; `discountedUnitPrice` is what
+  // was actually charged (the fixed 20%-off checkout policy).
+  // `redeemedQuantity` tracks partial redemption at the bar.
+  cocktailOrder?: {
+    items: {
+      cocktail: mongoose.Types.ObjectId;
+      name: string;
+      unitPrice: number;
+      discountedUnitPrice: number;
+      quantity: number;
+      redeemedQuantity: number;
+    }[];
+    totalAmount: number;
+    qrCode?: string;
   } | null;
 }

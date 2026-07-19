@@ -87,6 +87,7 @@ import resendRoute from "./routes/resend.route"
 import crmRoute from "./routes/crm.route"
 import financeRoute from "./routes/finance.route"
 import checkinRoute from "./routes/checkin.route"
+import cocktailRedemptionRoute from "./routes/cocktailRedemption.route"
 
 // Middleware
 import { authRateLimiter } from "./middleware/rateLimit.middleware";
@@ -139,6 +140,7 @@ app.use("/api/resend", resendRoute)
 app.use("/api/crm", crmRoute)
 app.use("/api/finance", financeRoute)
 app.use("/api/checkin", checkinRoute)
+app.use("/api/cocktails", cocktailRedemptionRoute)
 
 
 

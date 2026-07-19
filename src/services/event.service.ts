@@ -305,6 +305,136 @@ export class EventService {
 
 
 
+  // ==================== COCKTAIL ADD-ON MENU ====================
+  // Mirrors the ticket create/update methods above — same
+  // immutable-price rule, same quantity-safety checks.
+
+  async createEventCocktail(
+    eventId: string,
+    data: {
+      name: string;
+      description?: string;
+      price: number;
+      currency?: string;
+      initialQuantity: number;
+    }
+  ): Promise<IEvent | null> {
+    try {
+      await this.ensureConnection();
+
+      const event = await eventModel.findById(eventId);
+      if (!event) throw this.businessError("Event not found", 404);
+
+      (event as any).cocktails.push({
+        name: data.name,
+        description: data.description ?? "",
+        price: data.price,
+        currency: data.currency ?? "NGN",
+        initialQuantity: data.initialQuantity,
+        availableQuantity: data.initialQuantity,
+      });
+
+      await event.save();
+      return event;
+    } catch (error: any) {
+      if (error.statusCode) throw error;
+      throw new Error(`Error creating event cocktail: ${error.message}`);
+    }
+  }
+
+  async updateEventCocktail(
+    eventId: string,
+    cocktailId: string,
+    updateData: Partial<{
+      name: string;
+      description: string;
+      price: number; // accepted in payload, never applied — see warnings
+      currency: string;
+      availableQuantity: number;
+      initialQuantity: number;
+    }>
+  ): Promise<{ event: IEvent; warnings: string[] }> {
+    try {
+      await this.ensureConnection();
+
+      const event = await eventModel.findById(eventId);
+      if (!event) throw this.businessError("Event not found", 404);
+
+      const cocktail = (event as any).cocktails.find(
+        (c: any) => c._id.toString() === cocktailId
+      );
+      if (!cocktail) throw this.businessError("Cocktail not found", 404);
+
+      const warnings: string[] = [];
+      if ((updateData as any).price !== undefined) {
+        warnings.push(
+          "Cocktail price cannot be changed after creation; the supplied price was ignored"
+        );
+      }
+
+      if (updateData.name !== undefined) cocktail.name = updateData.name;
+      if (updateData.description !== undefined) cocktail.description = updateData.description;
+      if (updateData.currency !== undefined) cocktail.currency = updateData.currency;
+
+      // Ground truth: cocktails actually sold so far for this item.
+      const sold = await this.getSoldQuantityForCocktail(eventId, cocktailId);
+
+      let nextInitial = cocktail.initialQuantity;
+      let nextAvailable = cocktail.availableQuantity;
+
+      if (updateData.initialQuantity !== undefined) {
+        if (updateData.initialQuantity < sold) {
+          throw this.businessError(
+            `Initial quantity cannot be set below ${sold} — ${sold} of this cocktail have already been sold`,
+            409
+          );
+        }
+        const delta = updateData.initialQuantity - nextInitial;
+        nextInitial = updateData.initialQuantity;
+        nextAvailable = Math.max(0, nextAvailable + delta);
+      }
+
+      if (updateData.availableQuantity !== undefined) {
+        if (updateData.availableQuantity > nextInitial) {
+          throw this.businessError(
+            `Available quantity (${updateData.availableQuantity}) cannot exceed initial quantity (${nextInitial})`,
+            400
+          );
+        }
+        nextAvailable = updateData.availableQuantity;
+      }
+
+      cocktail.initialQuantity = nextInitial;
+      cocktail.availableQuantity = nextAvailable;
+
+      await event.save();
+      return { event, warnings };
+    } catch (error: any) {
+      if (error.statusCode) throw error;
+      throw new Error(`Error updating event cocktail: ${error.message}`);
+    }
+  }
+
+  /**
+   * Sums cocktail quantities sold so far across completed/manually
+   * verified transactions for this event's cocktail item.
+   */
+  private async getSoldQuantityForCocktail(eventId: string, cocktailId: string): Promise<number> {
+    const rows = await transactionHistoryModel.aggregate([
+      {
+        $match: {
+          event: new mongoose.Types.ObjectId(eventId),
+          status: { $in: ["completed", "manually_verified"] },
+          "cocktailOrder.items.cocktail": new mongoose.Types.ObjectId(cocktailId),
+        },
+      },
+      { $unwind: "$cocktailOrder.items" },
+      { $match: { "cocktailOrder.items.cocktail": new mongoose.Types.ObjectId(cocktailId) } },
+      { $group: { _id: null, total: { $sum: "$cocktailOrder.items.quantity" } } },
+    ]);
+    return rows[0]?.total || 0;
+  }
+
   async createEventTicket(
     eventId: string,
     data: {
