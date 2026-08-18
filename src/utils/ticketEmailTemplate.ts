@@ -56,89 +56,140 @@ const generateStandardTicketPDF = async ({
 }: any): Promise<Buffer> => {
   return new Promise(async (resolve, reject) => {
     try {
-      const doc = new PDFDocument({ size: "A4", margin: 50 });
+      const doc = new PDFDocument({ size: "A4", margin: 0 });
       const chunks: Buffer[] = [];
 
       doc.on("data", (chunk) => chunks.push(chunk));
       doc.on("end", () => resolve(Buffer.concat(chunks)));
 
-      // === Load logo FIRST ===
       const logoBuffer = await logo2();
 
+      const PAGE_W = 612;
+      const PAGE_H = 792;
+      const GOLD = "#CCA33A";
+      const GOLD_DEEP = "#BA8703";
+      const DARK = "#0A0A0A";
+      const PANEL = "#141414";
+      const TEXT = "#F9F7F4";
+      const MUTED = "#9A9A9A";
+
       // === Background ===
-      doc.rect(0, 0, 612, 792).fill("#0A0A0A");
+      doc.rect(0, 0, PAGE_W, PAGE_H).fill(DARK);
+
+      // === Outer frame — classic engraved-card border ===
+      doc.rect(24, 24, PAGE_W - 48, PAGE_H - 48).lineWidth(1).strokeColor(GOLD).stroke();
+      doc.rect(30, 30, PAGE_W - 60, PAGE_H - 60).lineWidth(0.5).strokeColor("#4A3B10").stroke();
 
       // === Header ===
-      doc.rect(50, 50, 512, 80).fill("#BA8703");
-      doc.image(logoBuffer, 56, 55, { width: 60, height: 40 });
+      doc.image(logoBuffer, PAGE_W / 2 - 26, 52, { width: 52, height: 36 });
 
-      // === Event Title & Theme ===
-      doc.fillColor("#F9F7F4")
-        .fontSize(16)
-        .font("Helvetica-Bold")
-        .text(event.eventTitle, 200, 55, { width: 360 });
-
-      doc.fontSize(20)
-        .fillColor("#CCA33A")
-        .text(event.eventTheme, 200, 75, { width: 360 });
-
-      // === Ticket Type ===
-      doc.fontSize(12)
-        .fillColor("#F9F7F4")
+      doc.fillColor(MUTED)
+        .fontSize(10)
         .font("Helvetica")
-        .text(`${ticket.ticketName} Ticket`, 200, 105);
+        .text(event.eventTitle.toUpperCase(), 60, 100, {
+          align: "center",
+          width: PAGE_W - 120,
+          characterSpacing: 1.5,
+        });
 
-      // === QR Code ===
-      doc.image(buyer.qrCode, 206, 150, { width: 200, height: 200 });
+      doc.fillColor(GOLD)
+        .fontSize(26)
+        .font("Helvetica-Bold")
+        .text(event.eventTheme, 60, 118, {
+          align: "center",
+          width: PAGE_W - 120,
+        });
+
+      // Thin rule under title
+      doc.moveTo(PAGE_W / 2 - 50, 160).lineTo(PAGE_W / 2 + 50, 160)
+        .lineWidth(1).strokeColor(GOLD).stroke();
+
+      doc.fillColor(TEXT)
+        .fontSize(11)
+        .font("Helvetica")
+        .text(`${ticket.ticketName} Admission`, 60, 172, {
+          align: "center",
+          width: PAGE_W - 120,
+          characterSpacing: 0.5,
+        });
+
+      // === QR Code panel ===
+      const qrY = 205;
+      doc.roundedRect(PAGE_W / 2 - 105, qrY, 210, 210, 6).fill(PANEL);
+      doc.roundedRect(PAGE_W / 2 - 105, qrY, 210, 210, 6).lineWidth(0.75).strokeColor(GOLD_DEEP).stroke();
+      doc.image(buyer.qrCode, PAGE_W / 2 - 90, qrY + 15, { width: 180, height: 180 });
 
       // === Ticket ID & Transaction ===
-      doc.fillColor("#F9F7F4")
-        .fontSize(16)
-        .text(`Ticket ID: ${buyer.ticketId}`, 0, 370, {
+      const idY = qrY + 230;
+      doc.fillColor(TEXT)
+        .fontSize(15)
+        .font("Helvetica-Bold")
+        .text(`Ticket No. ${buyer.ticketId}`, 0, idY, {
           align: "center",
-          width: 612,
+          width: PAGE_W,
         });
 
-      doc.fillColor("#b3b3b3")
-        .fontSize(10)
-        .text(`Transaction: ${transaction.txnId}`, 0, 390, {
+      doc.fillColor(MUTED)
+        .fontSize(9)
+        .font("Helvetica")
+        .text(`Transaction Ref. ${transaction.txnId}`, 0, idY + 18, {
           align: "center",
-          width: 612,
+          width: PAGE_W,
         });
 
-      // === Buyer & Event Details ===
-      let yPos = 420;
-      const details = [
+      // === Perforation-style divider ===
+      const dividerY = idY + 48;
+      doc.save();
+      doc.dash(3, { space: 4 });
+      doc.moveTo(50, dividerY).lineTo(PAGE_W - 50, dividerY).lineWidth(1).strokeColor("#3A3A3A").stroke();
+      doc.undash();
+      doc.restore();
+
+      // === Buyer & Event Details — two-column card ===
+      const cardY = dividerY + 24;
+      const cardH = 190;
+      doc.roundedRect(50, cardY, PAGE_W - 100, cardH, 6).fill(PANEL);
+      doc.roundedRect(50, cardY, PAGE_W - 100, cardH, 6).lineWidth(0.5).strokeColor("#2A2A2A").stroke();
+
+      const colLeftX = 74;
+      const colRightX = PAGE_W / 2 + 20;
+
+      const leftDetails = [
         { label: "Ticket Holder", value: buyer.fullName },
         { label: "Email", value: buyer.email },
-        {
-          label: "Event Date & Time",
-          value: `${formatDate(event.startDate)}\n${formatTime(
-            event.startDate
-          )} - ${formatTime(event.endDate)}`,
-        },
-        { label: "Venue", value: `${event.venue}\n${event.address}` },
         { label: "Phone Number", value: buyer.phoneNumber },
       ];
+      const rightDetails = [
+        {
+          label: "Date & Time",
+          value: `${formatDate(event.startDate)}\n${formatTime(event.startDate)} – ${formatTime(event.endDate)}`,
+        },
+        { label: "Venue", value: `${event.venue}\n${event.address}` },
+      ];
 
-      details.forEach((detail) => {
-        doc.fillColor("#b3b3b3").fontSize(10).text(detail.label, 70, yPos);
-        doc
-          .fillColor("#F9F7F4")
-          .fontSize(12)
-          .font("Helvetica-Bold")
-          .text(detail.value, 70, yPos + 15);
-        yPos += 50;
+      let ly = cardY + 26;
+      leftDetails.forEach((d) => {
+        doc.fillColor(MUTED).fontSize(8.5).font("Helvetica").text(d.label.toUpperCase(), colLeftX, ly, { characterSpacing: 0.5 });
+        doc.fillColor(TEXT).fontSize(11).font("Helvetica-Bold").text(d.value, colLeftX, ly + 13, { width: 220 });
+        ly += 46;
+      });
+
+      let ry = cardY + 26;
+      rightDetails.forEach((d) => {
+        doc.fillColor(MUTED).fontSize(8.5).font("Helvetica").text(d.label.toUpperCase(), colRightX, ry, { characterSpacing: 0.5 });
+        doc.fillColor(TEXT).fontSize(11).font("Helvetica-Bold").text(d.value, colRightX, ry + 13, { width: 210 });
+        ry += 62;
       });
 
       // === Footer ===
-      doc.fillColor("#999999")
+      doc.fillColor(MUTED)
         .fontSize(9)
+        .font("Helvetica")
         .text(
-          "Present this ticket at the entrance. Each QR code can only be used once.",
-          50,
-          yPos + 20,
-          { width: 512, align: "center" }
+          "Present this ticket at the entrance. Each QR code is valid for a single admission.",
+          60,
+          cardY + cardH + 22,
+          { width: PAGE_W - 120, align: "center" }
         );
 
       doc.end();
@@ -182,38 +233,42 @@ const generateGroupTicketPDF = async ({
       // === Full background ===
       doc.rect(0, 0, PAGE_W, PAGE_H).fill(DARK);
 
+      // === Outer frame — matches standard ticket for a cohesive set ===
+      doc.rect(24, 24, PAGE_W - 48, PAGE_H - 48).lineWidth(1).strokeColor(GOLD).stroke();
+      doc.rect(30, 30, PAGE_W - 60, PAGE_H - 60).lineWidth(0.5).strokeColor("#4A3B10").stroke();
+
       // === Left accent rail ===
-      doc.rect(0, 0, 14, PAGE_H).fill(GOLD);
+      doc.rect(24, 24, 10, PAGE_H - 48).fill(GOLD);
 
       // === Top bar with logo + small event title ===
-      doc.rect(14, 0, PAGE_W - 14, 70).fill(PANEL);
-      doc.image(logoBuffer, 38, 15, { width: 50, height: 40 });
+      doc.rect(34, 24, PAGE_W - 58, 70).fill(PANEL);
+      doc.image(logoBuffer, 50, 39, { width: 50, height: 40 });
       doc.fillColor(MUTED)
         .fontSize(10)
         .font("Helvetica")
-        .text(event.eventTitle, 110, 22, { width: 440 });
+        .text(event.eventTitle, 118, 46, { width: 420, characterSpacing: 0.5 });
       doc.fillColor(GOLD)
         .fontSize(16)
         .font("Helvetica-Bold")
-        .text(event.eventTheme, 110, 36, { width: 440 });
+        .text(event.eventTheme, 118, 60, { width: 420 });
 
       // === GROUP badge (top right ribbon) ===
-      doc.roundedRect(460, 18, 100, 24, 4).fill(GOLD_DEEP);
+      doc.roundedRect(452, 42, 100, 24, 3).fill(GOLD_DEEP);
       doc.fillColor(DARK)
-        .fontSize(11)
+        .fontSize(10)
         .font("Helvetica-Bold")
-        .text("GROUP PASS", 460, 25, { width: 100, align: "center" });
+        .text("GROUP PASS", 452, 49, { width: 100, align: "center", characterSpacing: 0.5 });
 
       // === Hero block: ticket holder name, large and centered ===
       doc.fillColor(MUTED)
-        .fontSize(11)
+        .fontSize(10)
         .font("Helvetica")
-        .text("TICKET HOLDER", 0, 100, { align: "center", width: PAGE_W });
+        .text("TICKET HOLDER", 0, 128, { align: "center", width: PAGE_W, characterSpacing: 1.5 });
 
       doc.fillColor(TEXT)
-        .fontSize(34)
+        .fontSize(32)
         .font("Helvetica-Bold")
-        .text(buyer.fullName, 40, 120, {
+        .text(buyer.fullName, 40, 148, {
           align: "center",
           width: PAGE_W - 80,
         });
@@ -223,7 +278,7 @@ const generateGroupTicketPDF = async ({
         width: PAGE_W - 80,
         align: "center",
       });
-      const ruleY = 120 + nameHeight + 14;
+      const ruleY = 148 + nameHeight + 14;
       doc.moveTo(PAGE_W / 2 - 60, ruleY)
         .lineTo(PAGE_W / 2 + 60, ruleY)
         .lineWidth(2)
@@ -307,15 +362,15 @@ const generateGroupTicketPDF = async ({
 
       // === Footer banner ===
       const footerY = cardY + cardH + 24;
-      doc.rect(14, footerY, PAGE_W - 14, 46).fill(GOLD_DEEP);
+      doc.rect(34, footerY, PAGE_W - 68, 40).fill(GOLD_DEEP);
       doc.fillColor(DARK)
         .fontSize(9)
         .font("Helvetica-Bold")
         .text(
-          "GROUP ENTRY · Present this ticket at the entrance. Each QR code can only be used once.",
-          40,
-          footerY + 17,
-          { width: PAGE_W - 94, align: "center" }
+          "GROUP ENTRY  ·  Present this ticket at the entrance. Each QR code is valid for a single admission.",
+          50,
+          footerY + 14,
+          { width: PAGE_W - 100, align: "center", characterSpacing: 0.25 }
         );
 
       doc.end();
@@ -339,61 +394,92 @@ export const ticketEmailTemplate = ({
   const isGroupTicket = (ticket?.ticketName || "").toString().toLowerCase().includes("group");
 
   return `
-  <div style="font-family: Arial, Helvetica, sans-serif; background:#0A0A0A; padding:40px;">
-    <div style="max-width:600px; margin:auto; background:#151515; padding:30px; border-radius:12px;">
+  <div style="font-family: Georgia, 'Times New Roman', serif; background:#0A0A0A; padding:48px 20px;">
+    <div style="max-width:560px; margin:auto; background:#141414; border:1px solid #2A2A2A; border-radius:4px; overflow:hidden;">
 
-      <!-- Logo -->
-      <div style="text-align:center; margin-bottom:20px;">
-        <img src="${logoUrl}" alt="Logo" style="height:50px;" />
-      </div>
+      <!-- Top gold rule -->
+      <div style="height:3px; background:#CCA33A;"></div>
 
-      <!-- Success Header -->
-      <div style="text-align:center; margin-bottom:30px;">
-        <div style="display:inline-block;width:64px;height:64px;border:2px solid #22C55E;border-radius:50%;line-height:64px">
-          <span style="color:#00C950;font-size:32px">✓</span>
+      <div style="padding:40px 40px 32px;">
+
+        <!-- Logo -->
+        <div style="text-align:center; margin-bottom:28px;">
+          <img src="${logoUrl}" alt="Logo" style="height:46px;" />
         </div>
-        <h1 style="margin:10px 0 0; font-size:28px; font-weight:600; color:#F9F7F4;">Payment Successful!</h1>
-        ${isGroupTicket ? `<p style="margin:6px 0 0; display:inline-block; background:#BA8703; color:#0A0A0A; font-size:11px; font-weight:700; padding:4px 10px; border-radius:4px; letter-spacing:0.5px;">GROUP PASS</p>` : ""}
-      </div>
 
-      <!-- Greeting -->
-      <p style="margin:0 0 16px; color:#F9F7F4; font-size:16px;">Hi ${buyer.fullName},</p>
-      <p style="margin:0 0 16px; color:#b3b3b3; font-size:14px; line-height:1.6;">
-        Your ticket for <strong style="color:#CCA33A">${event.eventTheme}</strong> has been confirmed! 
-      </p>
+        <!-- Confirmation mark -->
+        <div style="text-align:center; margin-bottom:28px;">
+          <div style="display:inline-block;width:56px;height:56px;border:1px solid #CCA33A;border-radius:50%;line-height:56px">
+            <span style="color:#CCA33A;font-size:24px;font-family:Georgia,serif;">&#10003;</span>
+          </div>
+          <h1 style="margin:16px 0 0; font-size:22px; font-weight:400; letter-spacing:1px; color:#F9F7F4; text-transform:uppercase;">Booking Confirmed</h1>
+          ${isGroupTicket ? `<p style="margin:10px 0 0; display:inline-block; border:1px solid #CCA33A; color:#CCA33A; font-size:10px; font-weight:600; padding:5px 14px; border-radius:2px; letter-spacing:1.5px; font-family:Arial,sans-serif;">GROUP PASS</p>` : ""}
+        </div>
 
-      <!-- Event Info Box -->
-      <div style="background:#0A0A0A; border-left:4px solid #CCA33A; padding:20px; margin:20px 0; border-radius:6px;">
-        <p style="margin:0 0 6px; color:#CCA33A; font-size:12px; font-weight:600;">EVENT DETAILS</p>
-        <p style="margin:0 0 4px; color:#F9F7F4; font-size:16px; font-weight:500;">${event.eventTitle}</p>
-        <p style="margin:0 0 4px; color:#b3b3b3; font-size:14px;">📍 ${event.venue}</p>
-        <p style="margin:0 0 4px; color:#b3b3b3; font-size:14px;">🗓 ${formatDate(event.startDate)} | ${formatTime(event.startDate)} - ${formatTime(event.endDate)}</p>
-        <p style="margin:0; color:#b3b3b3; font-size:14px;">🎫 ${ticket.ticketName} Ticket | Ticket ID: ${buyer.ticketId}</p>
-      </div>
+        <!-- Divider -->
+        <div style="width:40px; height:1px; background:#CCA33A; margin:0 auto 28px;"></div>
 
-      <!-- PDF Reminder -->
-      <p style="margin:0 0 16px; color:#b3b3b3; font-size:14px; line-height:1.6;">
-        Your ticket is attached as a PDF. Please save it to your phone or print it to present at the venue entrance.
-      </p>
-
-      <!-- Quick Reminders -->
-      <div style="background:#2A1F0F; border:2px solid #F59E0B; border-radius:8px; padding:20px; margin-bottom:24px;">
-        <p style="margin:0 0 10px; color:#F59E0B; font-size:14px; font-weight:600;">📌 Quick Reminders:</p>
-        <ul style="margin:0; padding-left:20px; color:#b3b3b3; font-size:13px; line-height:1.6;">
-          <li>Each QR code can only be scanned once</li>
-          <li>Arrive early to avoid queues</li>
-          <li>Bring a valid ID matching the ticket holder name</li>
-        </ul>
-      </div>
-
-      <!-- Footer -->
-      <div style="text-align:center; padding-top:20px; border-top:1px solid #27272A;">
-        <p style="margin:0 0 8px; color:#666; font-size:12px;">
-          Questions? Contact <a href="mailto:support@decavemgt.com" style="color:#CCA33A; text-decoration:none;">support@decavemgt.com</a>
+        <!-- Greeting -->
+        <p style="margin:0 0 14px; color:#F9F7F4; font-size:15px; font-family:Arial,sans-serif;">Dear ${buyer.fullName},</p>
+        <p style="margin:0 0 24px; color:#b3b3b3; font-size:14px; line-height:1.7; font-family:Arial,sans-serif;">
+          We are pleased to confirm your place at <span style="color:#CCA33A;">${event.eventTheme}</span>. A summary of your booking is set out below.
         </p>
-        <p style="margin:0; color:#666; font-size:11px;">© ${new Date().getFullYear()} DeCave. All rights reserved.</p>
+
+        <!-- Event Info Box -->
+        <table style="width:100%; border-collapse:collapse; border:1px solid #2A2A2A; margin-bottom:24px; font-family:Arial,sans-serif;">
+          <tr>
+            <td style="padding:18px 20px; border-bottom:1px solid #2A2A2A;">
+              <p style="margin:0 0 3px; color:#7A7A7A; font-size:10px; letter-spacing:1px; text-transform:uppercase;">Event</p>
+              <p style="margin:0; color:#F9F7F4; font-size:15px;">${event.eventTitle}</p>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:18px 20px; border-bottom:1px solid #2A2A2A;">
+              <p style="margin:0 0 3px; color:#7A7A7A; font-size:10px; letter-spacing:1px; text-transform:uppercase;">Venue</p>
+              <p style="margin:0; color:#F9F7F4; font-size:14px;">${event.venue}</p>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:18px 20px; border-bottom:1px solid #2A2A2A;">
+              <p style="margin:0 0 3px; color:#7A7A7A; font-size:10px; letter-spacing:1px; text-transform:uppercase;">Date &amp; Time</p>
+              <p style="margin:0; color:#F9F7F4; font-size:14px;">${formatDate(event.startDate)} &nbsp;·&nbsp; ${formatTime(event.startDate)} – ${formatTime(event.endDate)}</p>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:18px 20px;">
+              <p style="margin:0 0 3px; color:#7A7A7A; font-size:10px; letter-spacing:1px; text-transform:uppercase;">Admission</p>
+              <p style="margin:0; color:#F9F7F4; font-size:14px;">${ticket.ticketName} &nbsp;·&nbsp; Ticket ID ${buyer.ticketId}</p>
+            </td>
+          </tr>
+        </table>
+
+        <!-- PDF Reminder -->
+        <p style="margin:0 0 24px; color:#b3b3b3; font-size:13px; line-height:1.7; font-family:Arial,sans-serif;">
+          Your ticket is enclosed as a PDF. Please keep it accessible on your phone, or printed, to present at the entrance.
+        </p>
+
+        <!-- Quick Reminders -->
+        <div style="border:1px solid #3A2E10; background:#1A1509; padding:20px 22px; margin-bottom:28px; font-family:Arial,sans-serif;">
+          <p style="margin:0 0 10px; color:#CCA33A; font-size:11px; font-weight:700; letter-spacing:1px; text-transform:uppercase;">Please Note</p>
+          <ul style="margin:0; padding-left:18px; color:#b3b3b3; font-size:13px; line-height:1.8;">
+            <li>Each QR code is valid for a single entry</li>
+            <li>Please arrive early to avoid queues at the door</li>
+            <li>Bring valid ID matching the name on the ticket</li>
+          </ul>
+        </div>
+
+        <!-- Footer -->
+        <div style="text-align:center; padding-top:24px; border-top:1px solid #2A2A2A; font-family:Arial,sans-serif;">
+          <p style="margin:0 0 8px; color:#7A7A7A; font-size:12px;">
+            Questions? Write to <a href="mailto:support@decavemgt.com" style="color:#CCA33A; text-decoration:none;">support@decavemgt.com</a>
+          </p>
+          <p style="margin:0; color:#555; font-size:11px; letter-spacing:0.5px;">&copy; ${new Date().getFullYear()} DECAVE — All Rights Reserved</p>
+        </div>
+
       </div>
 
+      <!-- Bottom gold rule -->
+      <div style="height:3px; background:#CCA33A;"></div>
     </div>
   </div>
   `;

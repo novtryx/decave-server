@@ -51,84 +51,135 @@ export const generateCocktailPDF = async (data: CocktailPDFData): Promise<Buffer
 
   return new Promise((resolve, reject) => {
     try {
-      const doc = new PDFDocument({ size: "A4", margin: 50 });
+      const doc = new PDFDocument({ size: "A4", margin: 0 });
       const chunks: Buffer[] = [];
 
       doc.on("data", (chunk) => chunks.push(chunk));
       doc.on("end", () => resolve(Buffer.concat(chunks)));
 
-      // Background
-      doc.rect(0, 0, 612, 792).fill(DARK);
+      const PAGE_W = 612;
+      const PAGE_H = 792;
+      const PANEL = "#141414";
 
-      // Header band
-      doc.rect(50, 50, 512, 80).fill(GOLD);
-      doc.image(logoBuffer, 56, 55, { width: 60, height: 40 });
-      doc.fillColor(TEXT).fontSize(20).font("Helvetica-Bold").text("Cocktail Order", 130, 65);
-      doc.fillColor(DARK).fontSize(12).font("Helvetica").text(data.eventTitle, 130, 92);
+      // Background
+      doc.rect(0, 0, PAGE_W, PAGE_H).fill(DARK);
+
+      // Outer frame — matches ticket set for a cohesive look
+      doc.rect(24, 24, PAGE_W - 48, PAGE_H - 48).lineWidth(1).strokeColor(GOLD).stroke();
+      doc.rect(30, 30, PAGE_W - 60, PAGE_H - 60).lineWidth(0.5).strokeColor("#4A3B10").stroke();
+
+      // Header
+      doc.image(logoBuffer, PAGE_W / 2 - 26, 52, { width: 52, height: 36 });
+
+      doc.fillColor(MUTED)
+        .fontSize(10)
+        .font("Helvetica")
+        .text(data.eventTitle.toUpperCase(), 60, 100, {
+          align: "center",
+          width: PAGE_W - 120,
+          characterSpacing: 1.5,
+        });
+
+      doc.fillColor(GOLD)
+        .fontSize(24)
+        .font("Helvetica-Bold")
+        .text("Cocktail Order", 60, 118, {
+          align: "center",
+          width: PAGE_W - 120,
+        });
+
+      doc.moveTo(PAGE_W / 2 - 50, 156).lineTo(PAGE_W / 2 + 50, 156)
+        .lineWidth(1).strokeColor(GOLD).stroke();
 
       // Buyer info
-      doc.fillColor(TEXT).fontSize(14).font("Helvetica-Bold").text(data.buyerName, 50, 155);
-      doc.fillColor(MUTED).fontSize(10).font("Helvetica").text(data.buyerEmail, 50, 175);
-      doc.fillColor(MUTED).fontSize(10).text(formatDate(data.eventDate), 50, 190);
-      doc.fillColor(MUTED).fontSize(9).text(`Order Ref: ${data.txnId}`, 50, 205);
+      doc.fillColor(TEXT)
+        .fontSize(11)
+        .font("Helvetica")
+        .text(`${data.buyerName}  ·  ${formatDate(data.eventDate)}`, 60, 168, {
+          align: "center",
+          width: PAGE_W - 120,
+        });
+      doc.fillColor(MUTED)
+        .fontSize(9)
+        .text(`Order Ref. ${data.txnId}`, 60, 184, {
+          align: "center",
+          width: PAGE_W - 120,
+        });
 
-      // QR code — scanned at the bar to redeem
-      doc.image(data.qrCode, 206, 235, { width: 200, height: 200 });
-      doc
-        .fillColor(MUTED)
+      // QR code panel — scanned at the bar to redeem
+      const qrY = 205;
+      doc.roundedRect(PAGE_W / 2 - 105, qrY, 210, 210, 6).fill(PANEL);
+      doc.roundedRect(PAGE_W / 2 - 105, qrY, 210, 210, 6).lineWidth(0.75).strokeColor(GOLD).stroke();
+      doc.image(data.qrCode, PAGE_W / 2 - 90, qrY + 15, { width: 180, height: 180 });
+
+      doc.fillColor(MUTED)
         .fontSize(9)
         .font("Helvetica")
-        .text("Present this QR at the bar to redeem your drinks", 50, 445, {
-          width: 512,
+        .text("Present this QR at the bar to redeem your drinks", 60, qrY + 224, {
+          width: PAGE_W - 120,
           align: "center",
         });
 
-      // Order breakdown
-      let yPos = 480;
-      doc.fillColor(TEXT).fontSize(12).font("Helvetica-Bold").text("Your Order", 50, yPos);
-      yPos += 25;
+      // Perforation-style divider
+      const dividerY = qrY + 250;
+      doc.save();
+      doc.dash(3, { space: 4 });
+      doc.moveTo(50, dividerY).lineTo(PAGE_W - 50, dividerY).lineWidth(1).strokeColor("#3A3A3A").stroke();
+      doc.undash();
+      doc.restore();
 
+      // Order breakdown card
+      const cardY = dividerY + 20;
+      const rowH = 24;
+      const cardH = 46 + data.items.length * rowH;
+      doc.roundedRect(50, cardY, PAGE_W - 100, cardH, 6).fill(PANEL);
+      doc.roundedRect(50, cardY, PAGE_W - 100, cardH, 6).lineWidth(0.5).strokeColor("#2A2A2A").stroke();
+
+      doc.fillColor(GOLD)
+        .fontSize(10)
+        .font("Helvetica-Bold")
+        .text("YOUR ORDER", 70, cardY + 18, { characterSpacing: 1 });
+
+      let yPos = cardY + 40;
       data.items.forEach((item) => {
         doc
           .fillColor(TEXT)
           .fontSize(11)
           .font("Helvetica")
-          .text(`${item.name} × ${item.quantity}`, 50, yPos);
+          .text(`${item.name} × ${item.quantity}`, 70, yPos, { width: 260 });
         doc
           .fillColor(MUTED)
-          .fontSize(10)
+          .fontSize(9.5)
           .text(
             `₦${(item.discountedUnitPrice * item.quantity).toLocaleString()}  ·  ${item.redeemedQuantity}/${item.quantity} redeemed`,
-            300,
+            320,
             yPos,
-            { width: 250, align: "right" }
+            { width: 222, align: "right" }
           );
-        yPos += 22;
+        yPos += rowH;
       });
 
-      yPos += 10;
-      doc
-        .moveTo(50, yPos)
-        .lineTo(562, yPos)
-        .strokeColor("#333333")
-        .stroke();
-      yPos += 15;
-
+      // Total
+      const totalY = cardY + cardH + 20;
+      doc.moveTo(50, totalY).lineTo(PAGE_W - 50, totalY).lineWidth(0.5).strokeColor("#2A2A2A").stroke();
       doc
         .fillColor(GOLD)
-        .fontSize(13)
+        .fontSize(14)
         .font("Helvetica-Bold")
-        .text(`Total Paid: ₦${data.totalAmount.toLocaleString()}`, 50, yPos);
+        .text(`Total Paid: ₦${data.totalAmount.toLocaleString()}`, 50, totalY + 14, {
+          width: PAGE_W - 100,
+          align: "center",
+        });
 
       doc
-        .fillColor("#666666")
+        .fillColor(MUTED)
         .fontSize(9)
         .font("Helvetica")
         .text(
-          "This QR can be scanned multiple times if you're collecting your drinks in rounds — it tracks how much you have left.",
-          50,
-          740,
-          { width: 512, align: "center" }
+          "This QR may be scanned in multiple rounds — it tracks how many drinks you have left to redeem.",
+          60,
+          totalY + 44,
+          { width: PAGE_W - 120, align: "center" }
         );
 
       doc.end();
@@ -148,35 +199,49 @@ export const cocktailEmailTemplate = (data: {
     .map(
       (item) => `
       <tr>
-        <td style="padding:8px 0;color:#F9F7F4;">${item.name} × ${item.quantity}</td>
-        <td style="padding:8px 0;color:#b3b3b3;text-align:right;">₦${(item.discountedUnitPrice * item.quantity).toLocaleString()}</td>
+        <td style="padding:10px 0;border-bottom:1px solid #2A2A2A;color:#F9F7F4;font-size:13px;">${item.name} × ${item.quantity}</td>
+        <td style="padding:10px 0;border-bottom:1px solid #2A2A2A;color:#b3b3b3;font-size:13px;text-align:right;">₦${(item.discountedUnitPrice * item.quantity).toLocaleString()}</td>
       </tr>`
     )
     .join("");
 
   return `
-  <div style="background:#0A0A0A;padding:40px 20px;font-family:Helvetica,Arial,sans-serif;">
-    <div style="max-width:480px;margin:0 auto;background:#111111;border-radius:12px;overflow:hidden;">
-      <div style="background:#BA8703;padding:24px;">
-        <h1 style="color:#F9F7F4;font-size:20px;margin:0;">🍸 Your Cocktail Order</h1>
-        <p style="color:#0A0A0A;margin:4px 0 0;">${data.eventTitle}</p>
-      </div>
-      <div style="padding:24px;">
-        <p style="color:#F9F7F4;">Hi ${data.buyerName},</p>
-        <p style="color:#b3b3b3;font-size:14px;">
-          Thanks for adding drinks to your order! Your cocktail QR code is attached as a PDF —
-          show it at the bar to redeem. You can redeem in multiple rounds if you don't want
-          all your drinks at once.
+  <div style="font-family: Georgia, 'Times New Roman', serif; background:#0A0A0A; padding:48px 20px;">
+    <div style="max-width:520px; margin:auto; background:#141414; border:1px solid #2A2A2A; border-radius:4px; overflow:hidden;">
+
+      <div style="height:3px; background:#BA8703;"></div>
+
+      <div style="padding:36px 40px 32px;">
+
+        <div style="text-align:center; margin-bottom:24px;">
+          <p style="margin:0 0 6px; color:#7A7A7A; font-size:10px; letter-spacing:1.5px; text-transform:uppercase; font-family:Arial,sans-serif;">${data.eventTitle}</p>
+          <h1 style="margin:0; font-size:22px; font-weight:400; letter-spacing:1px; color:#F9F7F4; text-transform:uppercase;">Cocktail Order</h1>
+        </div>
+
+        <div style="width:40px; height:1px; background:#BA8703; margin:0 auto 24px;"></div>
+
+        <p style="margin:0 0 14px; color:#F9F7F4; font-size:15px; font-family:Arial,sans-serif;">Dear ${data.buyerName},</p>
+        <p style="margin:0 0 24px; color:#b3b3b3; font-size:14px; line-height:1.7; font-family:Arial,sans-serif;">
+          Thank you for adding drinks to your order. Your redemption code is enclosed as a PDF — present it at the bar. It may be scanned across multiple rounds if you'd rather not collect everything at once.
         </p>
-        <table style="width:100%;border-collapse:collapse;margin-top:16px;">
+
+        <table style="width:100%; border-collapse:collapse; font-family:Arial,sans-serif; margin-bottom:8px;">
           ${rows}
         </table>
-        <div style="border-top:1px solid #2a2a2a;margin-top:12px;padding-top:12px;">
-          <p style="color:#BA8703;font-weight:bold;font-size:16px;">
-            Total: ₦${data.totalAmount.toLocaleString()}
+
+        <div style="text-align:center; padding-top:16px;">
+          <p style="margin:0; color:#BA8703; font-size:17px; font-weight:600; font-family:Arial,sans-serif;">
+            Total Paid: ₦${data.totalAmount.toLocaleString()}
           </p>
         </div>
+
+        <div style="text-align:center; padding-top:28px; margin-top:24px; border-top:1px solid #2A2A2A;">
+          <p style="margin:0; color:#555; font-size:11px; font-family:Arial,sans-serif; letter-spacing:0.5px;">&copy; ${new Date().getFullYear()} DECAVE — All Rights Reserved</p>
+        </div>
+
       </div>
+
+      <div style="height:3px; background:#BA8703;"></div>
     </div>
   </div>`;
 };
