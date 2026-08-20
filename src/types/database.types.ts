@@ -198,6 +198,7 @@ export interface ITransactionHistory extends Document{
   // influencer field already; this captures organic sources like
   // instagram / whatsapp / direct / email / other.
   referralSource?: string | null;
+  sessionRef?: string | null;
   // Set once, the first time a pending transaction is flagged as
   // abandoned (still pending past the abandonment threshold). Lets the
   // recovery job avoid re-flagging/re-notifying the same transaction.

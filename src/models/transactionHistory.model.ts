@@ -90,6 +90,12 @@ const TransactionHistorySchema = new Schema<ITransactionHistory>(
     paymentChannel: { type: String, default: null, trim: true },
     originalAmount: { type: Number, default: null },
     referralSource: { type: String, default: null, trim: true },
+    // Links this purchase back to the PageVisit that led to it (see
+    // pageVisit.model.ts). Client-generated per page load, sent
+    // through checkout unchanged. Not to be confused with
+    // `referralSource`, which is the affiliate/influencer code —
+    // this is purely "which traffic source landed the sale".
+    sessionRef: { type: String, default: null, trim: true, index: true },
     abandonedAt: { type: Date, default: null },
     manualVerification: {
       type: new Schema(

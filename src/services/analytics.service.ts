@@ -1,6 +1,7 @@
 import mongoose from "mongoose";
 import TransactionHistory from "../models/transactionHistory.model";
 import eventModel from "../models/event.model";
+import PageVisit from "../models/pageVisit.model";
 import {
   DashboardRange,
   DashboardDateRange,
@@ -928,6 +929,75 @@ export class AnalyticsService {
       noShowRate,
       checkInRate,
       totalCheckedIn,
+    };
+  }
+
+  // ==================== TRAFFIC SOURCE BREAKDOWN ====================
+  /**
+   * How visitors reached this event's page — Instagram, WhatsApp,
+   * etc — plus how many of each source went on to actually buy a
+   * ticket. Conversion is matched by `sessionRef`: the frontend
+   * generates one id per visit and sends it both to the visit-tracking
+   * call and, if they check out, along with the purchase, so a visit
+   * and a resulting transaction can be joined without cookies or
+   * user accounts.
+   */
+  public async getEventTrafficSources(eventId: string): Promise<any> {
+    await this.ensureConnection();
+
+    if (!mongoose.Types.ObjectId.isValid(eventId)) {
+      const err: any = new Error("Invalid event id");
+      err.statusCode = 400;
+      throw err;
+    }
+    const eventObjectId = new mongoose.Types.ObjectId(eventId);
+
+    const [visitsBySource, purchasesBySource, totalVisits] = await Promise.all([
+      PageVisit.aggregate([
+        { $match: { event: eventObjectId } },
+        { $group: { _id: "$source", visits: { $sum: 1 } } },
+      ]),
+      // Join completed/pending-turned-completed transactions back to
+      // the visit that led to them via sessionRef, so we can show a
+      // conversion rate per source, not just raw visit counts.
+      TransactionHistory.aggregate([
+        { $match: { event: eventObjectId, status: { $in: ["completed", "manually_verified"] }, sessionRef: { $exists: true, $ne: null } } },
+        {
+          $lookup: {
+            from: "pagevisits",
+            let: { ref: "$sessionRef" },
+            pipeline: [{ $match: { $expr: { $eq: ["$sessionRef", "$$ref"] } } }],
+            as: "visit",
+          },
+        },
+        { $unwind: { path: "$visit", preserveNullAndEmptyArrays: false } },
+        { $group: { _id: "$visit.source", purchases: { $sum: 1 } } },
+      ]),
+      PageVisit.countDocuments({ event: eventObjectId }),
+    ]);
+
+    const purchaseMap = new Map<string, number>(
+      purchasesBySource.map((row: any) => [row._id, row.purchases])
+    );
+
+    const breakdown = visitsBySource
+      .map((row: any) => {
+        const visits = row.visits;
+        const purchases = purchaseMap.get(row._id) || 0;
+        return {
+          source: row._id,
+          visits,
+          purchases,
+          conversionRate: visits > 0 ? Number(((purchases / visits) * 100).toFixed(1)) : 0,
+          sharePercent: totalVisits > 0 ? Number(((visits / totalVisits) * 100).toFixed(1)) : 0,
+        };
+      })
+      .sort((a: any, b: any) => b.visits - a.visits);
+
+    return {
+      eventId,
+      totalVisits,
+      sources: breakdown,
     };
   }
 

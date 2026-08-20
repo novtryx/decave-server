@@ -27,6 +27,18 @@ export const getEventAnalytics = async (req: Request, res: Response) => {
   }
 };
 
+export const getEventTrafficSources = async (req: Request, res: Response) => {
+  try {
+    const eventId = String(req.params.eventId);
+    const data = await analyticsService.getEventTrafficSources(eventId);
+    return res.status(200).json({ success: true, data });
+  } catch (error: any) {
+    console.error("Error fetching traffic source analytics:", error);
+    const statusCode = error.statusCode || 500;
+    return res.status(statusCode).json({ success: false, message: error.message });
+  }
+};
+
 export const compareEventAnalytics = async (req: Request, res: Response) => {
   try {
     const idsParam = req.query.ids;

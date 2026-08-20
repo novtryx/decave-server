@@ -18,3 +18,18 @@ export const authRateLimiter = rateLimit({
   legacyHeaders: false,
   // No store specified = uses default memory store
 });
+
+// Public, unauthenticated, hit once per real page load — generous
+// ceiling since a single visitor loading multiple event pages is
+// normal, but still caps scripted/bot flooding of the visits table.
+export const pageVisitRateLimiter = rateLimit({
+  windowMs: 1 * 60 * 1000,
+  max: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+  // Tracking is best-effort — never surface a 429 as a visible error,
+  // just drop the beat silently.
+  handler: (_req, res) => {
+    res.status(200).json({ success: false });
+  },
+});

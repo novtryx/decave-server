@@ -39,7 +39,7 @@ const calculatePaystackCharge = (amount: number) => {
 
 export const purchaseTicket = async (req: Request, res: Response) => {
   try {
-    const { eventId, ticketId, buyers, amount, referralCode, groupTicket = false, cocktails } = req.body;
+    const { eventId, ticketId, buyers, amount, referralCode, groupTicket = false, cocktails, sessionRef } = req.body;
 
     if (!buyers || buyers.length === 0) {
       return res.status(400).json({ message: "Buyers required" });
@@ -179,6 +179,11 @@ export const purchaseTicket = async (req: Request, res: Response) => {
       status: "pending",
       paystackId: "INIT",
       originalAmount: amount,
+      // Optional — ties this purchase back to the PageVisit that led
+      // to it, for the traffic-source conversion breakdown. Absent
+      // if the visit-tracking call never fired (e.g. ad blocker) or
+      // this checkout didn't originate from an event page.
+      ...(sessionRef && typeof sessionRef === "string" && { sessionRef }),
       ...(influencer && { influencer: influencer._id }),
       ...(resolvedCocktailItems.length > 0 && {
         cocktailOrder: {
