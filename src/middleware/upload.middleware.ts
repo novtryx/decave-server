@@ -1,35 +1,87 @@
-import rateLimit from 'express-rate-limit';
+import multer from "multer";
+import path from "path";
 
+// Use memory storage instead of disk
+const storage = multer.memoryStorage();
 
-/**
- * Factory function to create a rate limiter.
- * Ensures Redis is connected before using it.
- */
+// File filter for images
+const imageFilter = (req: any, file: Express.Multer.File, cb: multer.FileFilterCallback) => {
+  const allowedTypes = /jpeg|jpg|png|gif|webp/;
+  const extname = allowedTypes.test(path.extname(file.originalname).toLowerCase());
+  const mimetype = allowedTypes.test(file.mimetype);
 
+  if (extname && mimetype) {
+    cb(null, true);
+  } else {
+    cb(new Error("Only image files are allowed (jpeg, jpg, png, gif, webp)"));
+  }
+};
 
-export const authRateLimiter = rateLimit({
-  windowMs: 1 * 60 * 1000,
-  max: 15,
-  message: {
-    success: false,
-    message: "Too many authentication attempts, please try again after 5 minutes",
+// File filter for videos
+const videoFilter = (req: any, file: Express.Multer.File, cb: multer.FileFilterCallback) => {
+  const allowedTypes = /mp4|mov|avi|mkv|webm/;
+  const extname = allowedTypes.test(path.extname(file.originalname).toLowerCase());
+  const mimetype = /video/.test(file.mimetype);
+
+  if (extname && mimetype) {
+    cb(null, true);
+  } else {
+    cb(new Error("Only video files are allowed (mp4, mov, avi, mkv, webm)"));
+  }
+};
+
+// File filter for both images and videos
+const mediaFilter = (req: any, file: Express.Multer.File, cb: multer.FileFilterCallback) => {
+  const allowedImageTypes = /jpeg|jpg|png|gif|webp/;
+  const allowedVideoTypes = /mp4|mov|avi|mkv|webm/;
+  const extname = path.extname(file.originalname).toLowerCase();
+  
+  const isImage = allowedImageTypes.test(extname) && /image/.test(file.mimetype);
+  const isVideo = allowedVideoTypes.test(extname) && /video/.test(file.mimetype);
+
+  if (isImage || isVideo) {
+    cb(null, true);
+  } else {
+    cb(new Error("Only image and video files are allowed"));
+  }
+};
+
+// Upload configurations
+export const uploadImage = multer({
+  storage: storage,
+  limits: {
+    fileSize: parseInt(process.env.MAX_FILE_SIZE || "10485760"), // 10MB default
   },
-  standardHeaders: true,
-  legacyHeaders: false,
-  // No store specified = uses default memory store
+  fileFilter: imageFilter,
 });
 
-// Public, unauthenticated, hit once per real page load — generous
-// ceiling since a single visitor loading multiple event pages is
-// normal, but still caps scripted/bot flooding of the visits table.
-export const pageVisitRateLimiter = rateLimit({
-  windowMs: 1 * 60 * 1000,
-  max: 60,
-  standardHeaders: true,
-  legacyHeaders: false,
-  // Tracking is best-effort — never surface a 429 as a visible error,
-  // just drop the beat silently.
-  handler: (_req, res) => {
-    res.status(200).json({ success: false });
+export const uploadVideo = multer({
+  storage: storage,
+  limits: {
+    fileSize: 100 * 1024 * 1024, // 100MB for videos
   },
+  fileFilter: videoFilter,
 });
+
+export const uploadMedia = multer({
+  storage: storage,
+  limits: {
+    fileSize: 100 * 1024 * 1024, // 100MB
+  },
+  fileFilter: mediaFilter,
+});
+
+// Single image upload
+export const uploadSingleImage = uploadImage.single("image");
+
+// Multiple images upload
+export const uploadMultipleImages = uploadImage.array("images", 10);
+
+// Single video upload
+export const uploadSingleVideo = uploadVideo.single("video");
+
+// Mixed media upload
+export const uploadMixedMedia = uploadMedia.fields([
+  { name: "images", maxCount: 10 },
+  { name: "videos", maxCount: 3 },
+]);
