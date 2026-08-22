@@ -88,6 +88,8 @@ import crmRoute from "./routes/crm.route"
 import financeRoute from "./routes/finance.route"
 import checkinRoute from "./routes/checkin.route"
 import cocktailRedemptionRoute from "./routes/cocktailRedemption.route"
+import openCallRoute from "./routes/openCall.route"
+import openCallAdminRoute from "./routes/openCallAdmin.route"
 
 // Middleware
 import { authRateLimiter } from "./middleware/rateLimit.middleware";
@@ -141,6 +143,10 @@ app.use("/api/crm", crmRoute)
 app.use("/api/finance", financeRoute)
 app.use("/api/checkin", checkinRoute)
 app.use("/api/cocktails", cocktailRedemptionRoute)
+// Applicant-facing (public, no auth — identity is the resume token)
+app.use("/api/apply", openCallRoute)
+// Afrospook team review dashboard (authenticated)
+app.use("/api/admin/open-call", openCallAdminRoute)
 
 
 

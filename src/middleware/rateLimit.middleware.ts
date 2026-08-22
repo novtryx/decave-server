@@ -33,3 +33,18 @@ export const pageVisitRateLimiter = rateLimit({
     res.status(200).json({ success: false });
   },
 });
+
+// Public — applicant-facing open call flow. Looser than the visit
+// tracker since a real applicant legitimately hits save-progress
+// multiple times while moving through a multi-step form, and file
+// uploads count as separate requests too.
+export const openCallRateLimiter = rateLimit({
+  windowMs: 5 * 60 * 1000,
+  max: 120,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    success: false,
+    message: "Too many requests, please slow down and try again shortly.",
+  },
+});

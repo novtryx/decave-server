@@ -169,6 +169,36 @@ export class UploadService {
     }
   }
 
+  // Upload arbitrary non-image/video files (PDFs, docs) — used for
+  // things like a portfolio deck or menu upload where the applicant
+  // might send a PDF rather than an image.
+  async uploadRaw(
+    fileBuffer: Buffer,
+    folder: string = "decave/documents"
+  ): Promise<UploadApiResponse> {
+    try {
+      const result = await this.uploadBuffer(fileBuffer, folder, "raw" as any, {});
+      return result;
+    } catch (error: any) {
+      throw new Error(`File upload failed: ${error.message}`);
+    }
+  }
+
+  // Delete a raw (non-image/video) file from Cloudinary
+  async deleteRaw(publicId: string): Promise<any> {
+    try {
+      const result = await cloudinary.uploader.destroy(publicId, {
+        resource_type: "raw",
+      });
+      if (result.result !== 'ok') {
+        throw new Error(`File deletion failed: ${result.result}`);
+      }
+      return result;
+    } catch (error: any) {
+      throw new Error(`File deletion failed: ${error.message}`);
+    }
+  }
+
   // Get optimized image URL
   getOptimizedImageUrl(publicId: string, options?: any): string {
     return cloudinary.url(publicId, {
