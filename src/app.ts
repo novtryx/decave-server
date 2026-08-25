@@ -90,6 +90,7 @@ import checkinRoute from "./routes/checkin.route"
 import cocktailRedemptionRoute from "./routes/cocktailRedemption.route"
 import openCallRoute from "./routes/openCall.route"
 import openCallAdminRoute from "./routes/openCallAdmin.route"
+import contactRoute from "./routes/contact.route"
 
 // Middleware
 import { authRateLimiter } from "./middleware/rateLimit.middleware";
@@ -147,6 +148,7 @@ app.use("/api/cocktails", cocktailRedemptionRoute)
 app.use("/api/apply", openCallRoute)
 // Afrospook team review dashboard (authenticated)
 app.use("/api/admin/open-call", openCallAdminRoute)
+app.use("/api/contact", contactRoute)
 
 
 
