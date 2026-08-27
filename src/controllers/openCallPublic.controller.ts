@@ -27,12 +27,12 @@ export const getCategory = async (req: Request, res: Response) => {
 
 export const startApplication = async (req: Request, res: Response) => {
   try {
-    const { categorySlug, fullName, email, phoneNumber } = req.body;
+    const { categorySlug, fullName, email, whatsappNumber } = req.body;
     const { application, applicant, category } = await openCallService.startApplication({
       categorySlug,
       fullName,
       email,
-      phoneNumber,
+      whatsappNumber,
     });
 
     res.status(201).json({
@@ -44,7 +44,7 @@ export const startApplication = async (req: Request, res: Response) => {
         applicant: {
           fullName: applicant.fullName,
           email: applicant.email,
-          phoneNumber: applicant.phoneNumber,
+          whatsappNumber: applicant.whatsappNumber,
         },
         answers: application.answers,
         files: application.files,
@@ -69,7 +69,7 @@ export const getApplicationByToken = async (req: Request, res: Response) => {
         applicant: {
           fullName: applicant.fullName,
           email: applicant.email,
-          phoneNumber: applicant.phoneNumber,
+          whatsappNumber: applicant.whatsappNumber,
           country: applicant.country,
           city: applicant.city,
           bio: applicant.bio,
@@ -98,6 +98,7 @@ export const saveApplicationProgress = async (req: Request, res: Response) => {
         answers: application.answers,
         applicant: {
           fullName: applicant.fullName,
+          whatsappNumber: applicant.whatsappNumber,
           country: applicant.country,
           city: applicant.city,
           bio: applicant.bio,

@@ -13,7 +13,7 @@ const startApplicationSchema = Joi.object({
   }),
   fullName: Joi.string().trim().min(2).max(200).required(),
   email: Joi.string().trim().email().required(),
-  phoneNumber: Joi.string().trim().min(5).max(30).required(),
+  whatsappNumber: Joi.string().trim().min(5).max(30).required(),
 });
 
 export const validateStartApplication = (req: Request, res: Response, next: NextFunction): void => {
@@ -38,10 +38,11 @@ export const validateStartApplication = (req: Request, res: Response, next: Next
 // sent, not that every required field is present yet. Required-field
 // enforcement happens only at submit time (validateSubmitApplication
 // below), driven by the category's own field config, not hardcoded
-// here — that's what keeps this reusable across all 8 categories.
+// here — that's what keeps this reusable across all 6 categories.
 const saveProgressSchema = Joi.object({
   profile: Joi.object({
     fullName: Joi.string().trim().min(2).max(200),
+    whatsappNumber: Joi.string().trim().min(5).max(30),
     country: Joi.string().trim().allow(""),
     city: Joi.string().trim().allow(""),
     bio: Joi.string().trim().max(1000).allow(""),
@@ -101,7 +102,7 @@ export const validateUpdateApplicationStatus = (req: Request, res: Response, nex
   next();
 };
 
-// Category management (admin) — used if/when Afrospook adds a 9th
+// Category management (admin) — used if/when Afrospook adds a 7th
 // category through the admin UI rather than the seed script.
 const categoryFieldSchema = Joi.object({
   name: Joi.string().trim().required(),

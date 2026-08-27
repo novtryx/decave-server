@@ -177,7 +177,12 @@ export type TransactionStatus =
 
 export interface ITransactionHistory extends Document{
   txnId: string;
-  paystackId:string;
+  paystackId?: string;
+  // Which payment processor handled this transaction. Optional/absent
+  // on very old records read via .lean(); the schema default is
+  // "paystack" for anything created going forward.
+  gateway?: "paystack" | "monnify";
+  monnifyTransactionRef?: string;
   event: mongoose.Types.ObjectId;
   ticket: mongoose.Types.ObjectId;
   buyers: IBuyer[];

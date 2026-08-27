@@ -65,7 +65,23 @@ const TransactionHistorySchema = new Schema<ITransactionHistory>(
     },
     paystackId: {
       type: String,
-      required: true,
+      required: false,
+    },
+    // Which payment processor was used for this transaction — lets
+    // both webhooks (Paystack + Monnify) share one confirmation path
+    // while still knowing which gateway's transaction id lives where.
+    // Defaults to "paystack" so every pre-existing transaction reads
+    // correctly without a migration.
+    gateway: {
+      type: String,
+      enum: ["paystack", "monnify"],
+      default: "paystack",
+    },
+    // Monnify's own transaction reference (their equivalent of
+    // paystackId), only ever set when gateway === "monnify".
+    monnifyTransactionRef: {
+      type: String,
+      required: false,
     },
     ticket: {
       type: Schema.Types.ObjectId,

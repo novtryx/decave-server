@@ -74,7 +74,7 @@ export class OpenCallService {
     categorySlug: string;
     fullName: string;
     email: string;
-    phoneNumber: string;
+    whatsappNumber: string;
   }): Promise<{ application: IApplication; applicant: IApplicant; category: ICategory }> {
     await this.ensureConnection();
 
@@ -86,7 +86,7 @@ export class OpenCallService {
       applicant = await Applicant.create({
         fullName: input.fullName,
         email,
-        phoneNumber: input.phoneNumber,
+        whatsappNumber: input.whatsappNumber,
       });
     }
 
@@ -142,7 +142,7 @@ export class OpenCallService {
   async saveProgress(
     token: string,
     updates: {
-      profile?: Partial<Pick<IApplicant, "fullName" | "country" | "city" | "bio" | "socialHandles">>;
+      profile?: Partial<Pick<IApplicant, "fullName" | "whatsappNumber" | "country" | "city" | "bio" | "socialHandles">>;
       answers?: IApplicationAnswer[];
     }
   ): Promise<{ application: IApplication; applicant: IApplicant }> {
@@ -197,7 +197,7 @@ export class OpenCallService {
    * a non-empty answer (or an uploaded file, for type "file") before
    * this will allow submission. This is the one place category rules
    * are enforced, and it reads them from data, not from a hardcoded
-   * switch statement — that's what keeps this reusable across all 8
+   * switch statement — that's what keeps this reusable across all 6
    * categories, and any future ones added via the admin.
    */
   async submitApplication(token: string): Promise<IApplication> {
@@ -347,7 +347,7 @@ export class OpenCallService {
         $or: [
           { fullName: { $regex: term, $options: "i" } },
           { email: { $regex: term, $options: "i" } },
-          { phoneNumber: { $regex: term, $options: "i" } },
+          { whatsappNumber: { $regex: term, $options: "i" } },
         ],
       }).select("_id");
       applicantIds = matchingApplicants.map((a) => a._id as mongoose.Types.ObjectId);
@@ -356,7 +356,7 @@ export class OpenCallService {
 
     const [applications, total] = await Promise.all([
       Application.find(match)
-        .populate("applicant", "fullName email phoneNumber country city")
+        .populate("applicant", "fullName email whatsappNumber country city")
         .populate("category", "name slug")
         .sort({ createdAt: -1 })
         .skip((page - 1) * limit)

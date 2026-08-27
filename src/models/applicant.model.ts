@@ -8,7 +8,7 @@ import mongoose, { Schema, Document } from "mongoose";
 export interface IApplicant extends Document {
   fullName: string;
   email: string;
-  phoneNumber: string;
+  whatsappNumber: string;
   country?: string;
   city?: string;
   profilePhoto?: string; // Cloudinary URL
@@ -35,7 +35,7 @@ const ApplicantSchema = new Schema<IApplicant>(
       match: [/^\S+@\S+\.\S+$/, "Please provide a valid email address"],
       index: true,
     },
-    phoneNumber: { type: String, required: true, trim: true },
+    whatsappNumber: { type: String, required: true, trim: true },
     country: { type: String, trim: true },
     city: { type: String, trim: true },
     profilePhoto: { type: String, default: null },
