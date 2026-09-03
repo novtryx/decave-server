@@ -5,6 +5,7 @@ import { newsletterSubscribedEmail } from "../utils/newsletterSubscribed";
 import newsletterModel from "../models/newsletter.model";
 import { newsletterTemplate } from "../utils/newsletterBulkMail";
 import { sendBulkEmail } from "../utils/bulkMail";
+import Applicant from "../models/applicant.model";
 
 export const subscribeToNewsletter = async (
   req: Request,
@@ -143,6 +144,90 @@ export const getAllSubscribedEmail = async (req: Request, res: Response) => {
     });
   }
 };
+// 🔹 Public, no-auth sync endpoint. Pull every open-call Applicant
+// email and auto-subscribe (auto-"certify") it to the newsletter list
+// — no double opt-in step. Safe to hit repeatedly: emails already on
+// the list are skipped, so nothing is duplicated and no repeat
+// confirmation emails go out.
+export const syncOpenCallApplicantsToNewsletter = async (
+  req: Request,
+  res: Response
+) => {
+  try {
+    const applicants = await Applicant.find({}, "email").lean();
+
+    if (applicants.length === 0) {
+      return res.status(200).json({
+        success: true,
+        message: "No open call applicants found",
+        totalApplicants: 0,
+        added: 0,
+        alreadySubscribed: 0,
+      });
+    }
+
+    // Applicant.email is already validated + lowercased at the schema
+    // level, but normalize again here since we're about to diff it
+    // against Newsletter.email (also lowercased/trimmed).
+    const applicantEmails = Array.from(
+      new Set(
+        applicants
+          .map((a: any) => a.email?.toLowerCase().trim())
+          .filter(Boolean)
+      )
+    );
+
+    const existing = await Newsletter.find(
+      { email: { $in: applicantEmails } },
+      "email"
+    ).lean();
+    const existingSet = new Set(existing.map((e) => e.email));
+
+    const newEmails = applicantEmails.filter(
+      (email) => !existingSet.has(email)
+    );
+
+    if (newEmails.length > 0) {
+      // insertMany with ordered:false so one duplicate-key race
+      // (e.g. someone manually subscribing at the same moment) can't
+      // abort the rest of the batch.
+      await Newsletter.insertMany(
+        newEmails.map((email) => ({ email })),
+        { ordered: false }
+      );
+
+      // Best-effort confirmation email — failures here shouldn't fail
+      // the sync itself, the subscription record is already saved.
+      try {
+        await sendBulkEmail(
+          newEmails,
+          "Newsletter Subscription Confirmed",
+          newsletterSubscribedEmail(`https://api.decavemgt.com/decave-logo.png`)
+        );
+      } catch (mailErr: any) {
+        console.error(
+          "Open-call → newsletter sync: confirmation email batch failed:",
+          mailErr.message
+        );
+      }
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: "Open call applicants synced to newsletter",
+      totalApplicants: applicantEmails.length,
+      added: newEmails.length,
+      alreadySubscribed: applicantEmails.length - newEmails.length,
+    });
+  } catch (error: any) {
+    return res.status(500).json({
+      success: false,
+      message: "Failed to sync open call applicants to newsletter",
+      error: error.message,
+    });
+  }
+};
+
 export const sendNewsletter = async (req: Request, res: Response) => {
   try {
     const { subject, body, emails, sendToAll } = req.body;

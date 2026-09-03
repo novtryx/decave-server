@@ -4,6 +4,7 @@ import Applicant, { IApplicant } from "../models/applicant.model";
 import Application, { IApplication, IApplicationAnswer, IUploadedFile, ApplicationStatus } from "../models/application.model";
 import Category, { ICategory } from "../models/category.model";
 import adminModel from "../models/admin.model";
+import Newsletter from "../models/newsletter.model";
 import { sendTransactionalEmail } from "../provider/email.provider";
 import { applicationStatusEmailTemplate, getApplicationStatusEmailContent } from "../utils/applicationStatusEmailTemplate";
 import { newApplicationAdminEmailTemplate } from "../utils/newApplicationAdminEmailTemplate";
@@ -249,6 +250,7 @@ export class OpenCallService {
     if (applicant) {
       this.notifyAdminsOfNewApplication(application, applicant, category);
       this.notifyApplicantOfStatusChange(applicant, category, "submitted");
+      this.subscribeApplicantToNewsletter(applicant);
     }
 
     return application;
@@ -312,6 +314,33 @@ export class OpenCallService {
       await sendTransactionalEmail({ email: applicant.email, name: applicant.fullName }, content.subject, html);
     } catch (error: any) {
       console.error("Failed to send applicant status-change email:", error.message);
+    }
+  }
+
+  /**
+   * Auto-subscribes ("certifies") a submitting applicant to the
+   * newsletter — no separate opt-in step, no confirmation email
+   * (they're already getting the submission-confirmed email from
+   * notifyApplicantOfStatusChange, so we don't double up). Same
+   * fire-and-forget contract as the two notify* methods above: never
+   * throws back into submitApplication, a newsletter hiccup can't
+   * turn a successful submission into a failed API response.
+   */
+  private async subscribeApplicantToNewsletter(applicant: IApplicant) {
+    try {
+      const email = applicant.email.toLowerCase().trim();
+      const exists = await Newsletter.findOne({ email });
+      if (!exists) {
+        await Newsletter.create({ email });
+      }
+    } catch (error: any) {
+      // Duplicate-key race (e.g. a near-simultaneous manual
+      // subscribe, or the /sync-open-call-applicants route running
+      // at the same moment) is fine to swallow — the email is on the
+      // list either way, which is all that matters here.
+      if (error.code !== 11000) {
+        console.error("Failed to auto-subscribe applicant to newsletter:", error.message);
+      }
     }
   }
 

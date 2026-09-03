@@ -71,4 +71,4 @@ export const createCategory = async (req: AuthRequest, res: Response) => {
     console.error("Error creating category:", error);
     res.status(error.statusCode || 500).json({ success: false, message: error.message });
   }
-};
+}; 
