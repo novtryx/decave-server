@@ -243,9 +243,28 @@ export const purchaseTicket = async (req: Request, res: Response) => {
       txnId,
       transaction,
     });
-  } catch (err) {
-    console.error("PURCHASE ERROR:", err);
-    res.status(500).json({ message: "Ticket purchase failed", err });
+   } catch (err: any) {
+    // Log the full error server-side for debugging, but never send the
+    // raw error object to the client: axios errors carry circular refs
+    // (sockets, agents) that can blow up res.json()'s JSON.stringify and
+    // turn a clean 500 into a connection drop / opaque platform error —
+    // which is exactly the "generic" failure this used to produce.
+    console.error("PURCHASE ERROR:", err?.response?.data || err?.message || err);
+
+    // Paystack (and Monnify) return their own reason in err.response.data
+    // when transaction/initialize rejects the request (bad email, amount
+    // below their minimum, invalid/misconfigured secret key, IP
+    // restriction on the key, inactive account, etc). Surface that
+    // specific reason when we have it, since "Ticket purchase failed" on
+    // its own tells neither us nor the buyer anything actionable.
+    const gatewayMessage =
+      err?.response?.data?.message || err?.response?.data?.error;
+
+    res.status(500).json({
+      message: gatewayMessage
+        ? `Payment could not be initialized: ${gatewayMessage}`
+        : "We couldn't start your payment. Please try again in a moment.",
+    });
   }
 };
 
@@ -258,7 +277,7 @@ export const purchaseTicket = async (req: Request, res: Response) => {
 // commission, emails, and newsletter signup only ever exist in one
 // place and can't drift out of sync between gateways.
 // ─────────────────────────────────────────────
-async function confirmPaymentSucceeded(params: {
+export async function confirmPaymentSucceeded(params: {
   transaction: any;
   gatewayTransactionId: string | number;
   paidAmountKobo?: number; // used as an influencer-commission fallback if originalAmount is missing

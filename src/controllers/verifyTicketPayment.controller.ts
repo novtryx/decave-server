@@ -6,6 +6,41 @@ import { transporter } from "../config/mailer";
 import { generateTicketPDF, ticketEmailTemplate } from "../utils/ticketEmailTemplate";
 import { Resend } from "resend";
 import transactionService from "../services/transaction.service";
+import { confirmPaymentSucceeded } from "./purchaseTicket.controller";
+
+// Shared response shape for a completed transaction — used both when the
+// webhook already completed it before this call landed, and when this
+// call is the one that completes it. Keeping this in one place means the
+// frontend always gets the same payload regardless of which path won.
+async function buildVerifiedResponse(transaction: any) {
+  const event = await eventModel.findById(transaction.event);
+  if (!event) {
+    return { success: false, message: "Event not found for this transaction." };
+  }
+
+  const ticket = event.tickets.find(
+    (t: any) => t._id.toString() === transaction.ticket.toString()
+  );
+
+  return {
+    success: true,
+    status: "completed",
+    transaction,
+    event: {
+      title: event.eventDetails.eventTitle,
+      venue: event.eventDetails.venue,
+      address: event.eventDetails.address,
+      startDate: event.eventDetails.startDate,
+      endDate: event.eventDetails.endDate,
+      theme: event.eventDetails.eventTheme,
+    },
+    ticket: {
+      ticketName: ticket?.ticketName,
+      price: ticket?.price,
+      currency: ticket?.currency,
+    },
+  };
+}
 
 
 
@@ -14,7 +49,27 @@ export const verifyTicketPayment = async (req: Request, res: Response) => {
   try {
     const reference = req.params.reference;
 
-    // 1️⃣ Verify Paystack
+    // 0️⃣ This is now the frontend's primary way to find out what
+    // happened to a payment, so it needs to be safe to call whether or
+    // not the webhook has already landed. Check our own record first —
+    // if the webhook already marked this completed, just return the
+    // same success payload instead of erroring, so a race between the
+    // webhook and this call never surfaces as a false "payment failed".
+    const existing = await transactionHistoryModel.findOne({
+      txnId: `TXN-${reference}`,
+    });
+
+    if (!existing) {
+      return res.status(404).json({ success: false, message: "We couldn't find that transaction." });
+    }
+
+    if (existing.status === "completed") {
+      return res.status(200).json(await buildVerifiedResponse(existing));
+    }
+
+    // 1️⃣ Ask Paystack directly what actually happened — this is the
+    // one place that gives us a real answer for a declined/failed card,
+    // since our webhook only ever fires on charge.success.
     const response = await paystack.get(`/transaction/verify/${reference}`);
     const data = response.data.data;
 
@@ -23,108 +78,43 @@ export const verifyTicketPayment = async (req: Request, res: Response) => {
         { txnId: `TXN-${reference}` },
         { status: "failed" }
       );
-      return res.status(400).json({ message: "Payment failed" });
+      // gateway_response is Paystack's own human-readable reason
+      // ("Declined", "Insufficient Funds", "Invalid PIN", etc) — pass it
+      // through so the buyer sees the real reason, not a generic one.
+      return res.status(200).json({
+        success: false,
+        status: "failed",
+        message: data.gateway_response || "Payment was not successful.",
+      });
     }
 
-    // 2️⃣ Find transaction
-    const transaction = await transactionHistoryModel.findOne({
-      txnId: `TXN-${reference}`
+    // 2️⃣ Paystack confirms this was a real success — run it through the
+    // SAME completion routine the webhook uses (stock deduction for
+    // tickets AND cocktails, influencer commission, ticket + cocktail
+    // emails, newsletter signup). Previously this endpoint reimplemented
+    // a partial version of that logic by hand, which meant a payment
+    // confirmed through this path (rather than the webhook) silently
+    // skipped cocktail stock deduction, influencer commission, and
+    // newsletter signup. confirmPaymentSucceeded() is itself idempotent
+    // (no-ops if another caller already completed it), so it's safe to
+    // call here even if the webhook fires around the same time.
+    await confirmPaymentSucceeded({
+      transaction: existing,
+      gatewayTransactionId: data.id,
+      paidAmountKobo: data.amount,
     });
 
-    if (!transaction || transaction.status === "completed") {
-      return res.status(400).json({ message: "Invalid transaction" });
-    }
-
-    // 3️⃣ Mark completed
-    transaction.status = "completed";
-    transaction.paystackId = data.id;
-    await transaction.save();
-
-    // 4️⃣ Deduct ticket quantity + fetch details
-    const event = await eventModel.findById(transaction.event);
-    
-    if (!event) {
-      return res.status(404).json({ message: "Event not found" });
-    }
-    
-    const ticket = event.tickets.find(
-      (t: any) => t._id.toString() === transaction.ticket.toString()
-    );
-    
-    if (!ticket) {
-      return res.status(404).json({ message: "Ticket not found in event" });
-    }
-    
-    ticket.availableQuantity = Math.max(
-      ticket.availableQuantity - transaction.buyers.length,
-      0
-    );
-    
-    await event.save();
-    await transactionService.invalidateDashboardCache();
-
-    for (const buyer of transaction.buyers) {
-  try {
-    const pdfBuffer = await generateTicketPDF({
-      buyer,
-      event: event.eventDetails,
-      ticket,
-      transaction
+    const refreshed = await transactionHistoryModel.findOne({
+      txnId: `TXN-${reference}`,
     });
 
-  //   const result = await resend.emails.send({
-  // from: "DeCave Tickets <no-reply@decavemgt.com>",
-  // to: buyer.email,
-  // replyTo: "support@decavemgt.com",
-  const result = await transporter.sendMail({
-  from: '"DeCave Ticket " <info@decavemgt.com>',
-  to: buyer.email,
-  subject: `Your Ticket for ${event.eventDetails.eventTitle}`,
-  html: ticketEmailTemplate({
-    buyer,
-    event: event.eventDetails,
-    ticket,
-    transaction
-  }),
-  attachments: [
-  {
-    filename: `Ticket-${buyer.ticketId}.pdf`,
-    content: pdfBuffer,
-    contentType: "application/pdf"
-  }
-]
-});
-
-console.log("Resend result:", result);
-  } catch (err) {
-    console.log("Email failed for:", buyer.email, err);
-  }
-}
-
-    // 5️⃣ RESPONSE PAYLOAD (clean + frontend-ready)
-    res.status(200).json({
-      success: true,
-      transaction,
-      event: {
-        title: event.eventDetails.eventTitle,
-        venue: event.eventDetails.venue,
-        address:event.eventDetails.address,
-        startDate: event.eventDetails.startDate,
-        endDate: event.eventDetails.endDate,
-        theme: event.eventDetails.eventTheme
-      },
-      ticket: {
-        ticketName: ticket.ticketName,
-        price: ticket.price,
-        currency: ticket.currency
-      }
-    });
+    res.status(200).json(await buildVerifiedResponse(refreshed));
 
   } catch (err: any) {
-    console.error("VERIFY ERROR:", err);
+    console.error("VERIFY ERROR:", err?.response?.data || err?.message || err);
     res.status(500).json({
-      message: "Verification error",
-      error: err.message
+      success: false,
+      message: "We couldn't confirm your payment right now. Please check your email for a ticket, or contact support with your order reference.",
     });
   }
 };
